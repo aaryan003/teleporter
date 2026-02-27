@@ -1,23 +1,50 @@
-import os
-from functools import lru_cache
+"""
+Application configuration from environment variables.
+"""
 
-from pydantic import BaseModel
-
-
-class Settings(BaseModel):
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://teleporter:teleporter@db:5432/teleporter",
-    )
-    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
-    google_maps_api_key: str | None = os.getenv("GOOGLE_MAPS_API_KEY")
-    razorpay_key_id: str | None = os.getenv("RAZORPAY_KEY_ID")
-    razorpay_key_secret: str | None = os.getenv("RAZORPAY_KEY_SECRET")
-    jwt_secret: str = os.getenv("JWT_SECRET", "changeme")
-    telegram_bot_token: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
+from pydantic_settings import BaseSettings
 
 
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    return Settings()
+class Settings(BaseSettings):
+    # Database
+    DATABASE_URL: str = "postgresql+asyncpg://teleporter:teleporter_secret@db:5432/teleporter"
 
+    # Redis
+    REDIS_URL: str = "redis://redis:6379/0"
+
+    # Google Maps
+    GOOGLE_MAPS_API_KEY: str = ""
+
+    # Razorpay
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+
+    # n8n
+    N8N_WEBHOOK_URL: str = "http://n8n:5678"
+
+    # Telegram
+    TELEGRAM_BOT_TOKEN: str = ""
+
+    # AI
+    OPENAI_API_KEY: str = ""
+
+    # JWT
+    JWT_SECRET: str = "change_this"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRY_HOURS: int = 24
+
+    # Business rules
+    BUSINESS_HOURS_START: int = 8   # 8 AM
+    BUSINESS_HOURS_END: int = 20    # 8 PM
+    CUTOFF_BUFFER_MIN: int = 90     # minutes before close — no new slots
+    MAX_PARCELS_PER_ROUTE: int = 5
+    BATCH_THRESHOLD: int = 5         # parcels before triggering route optimizer
+    MAX_DETOUR_KM: float = 2.0       # for return-trip pickups
+    MAX_RETURN_PICKUPS: int = 3
+
+    class Config:
+        env_file = ".env"
+        extra = "allow"
+
+
+settings = Settings()

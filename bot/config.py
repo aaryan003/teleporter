@@ -1,3 +1,17 @@
-TELEGRAM_BOT_TOKEN = "8410355738:AAHuDkGDyrKuuY-Q6UPBpy9XtO0Awz8xPrk"
-API_BASE_URL = "http://api:8000"  # used when running full Docker stack
+"""Bot configuration from environment variables."""
 
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    TELEGRAM_BOT_TOKEN: str = ""
+    API_BASE_URL: str = "http://api:8000"
+    REDIS_URL: str = "redis://redis:6379/0"
+    ADMIN_TELEGRAM_ID: str = ""
+
+    class Config:
+        env_file = ".env"
+        extra = "allow"
+
+
+settings = Settings()

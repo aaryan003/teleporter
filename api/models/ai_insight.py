@@ -1,17 +1,23 @@
-from sqlalchemy import Column, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
+"""AI Insight ORM model — AI-generated dashboard analytics."""
 
-from api.models.base import Base
+from datetime import datetime
+from sqlalchemy import String, Text, Boolean, DateTime, JSON, Enum as PgEnum
+from sqlalchemy.orm import Mapped, mapped_column
+from db.database import Base
 
 
 class AIInsight(Base):
     __tablename__ = "ai_insights"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    category = Column(String(50), nullable=False)
-    insight = Column(Text, nullable=False)
-    severity = Column(String(20), default="INFO")
-    data = Column(JSONB, nullable=True)
-    generated_at = Column(TIMESTAMP, nullable=False)
-    expires_at = Column(TIMESTAMP, nullable=True)
-
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
+    severity: Mapped[str] = mapped_column(
+        PgEnum("INFO", "WARNING", "ACTION_REQUIRED", name="insight_severity", create_type=False),
+        default="INFO",
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    insight: Mapped[str] = mapped_column(Text, nullable=False)
+    data: Mapped[dict | None] = mapped_column(JSON, default={})
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

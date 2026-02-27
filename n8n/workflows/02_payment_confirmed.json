@@ -1,0 +1,133 @@
+{
+    "name": "02 — Payment Confirmed (COD + Simulated)",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "payment-confirmed",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "webhook-payment",
+            "name": "Webhook: Payment Confirmed",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/payments/confirm/{{ $json.body.order_id }}?payment_mode={{ $json.body.payment_mode || 'COD' }}",
+                "method": "POST",
+                "options": {}
+            },
+            "id": "confirm-payment",
+            "name": "Confirm Payment via API",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.status }}",
+                            "operation": "equal",
+                            "value2": "confirmed"
+                        }
+                    ]
+                }
+            },
+            "id": "is-confirmed",
+            "name": "Payment Confirmed?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const result = $json;\nreturn [{ json: {\n  status: 'confirmed',\n  order_id: result.order_id,\n  order_number: result.order_number,\n  payment_mode: result.payment_mode,\n  pickup_otp: result.pickup_otp,\n  drop_otp: result.drop_otp\n}}];"
+            },
+            "id": "success",
+            "name": "Payment Success",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'failed', message: 'Payment confirmation failed' } }];"
+            },
+            "id": "failure",
+            "name": "Payment Failed",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Payment Confirmed": {
+            "main": [
+                [
+                    {
+                        "node": "Confirm Payment via API",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Confirm Payment via API": {
+            "main": [
+                [
+                    {
+                        "node": "Payment Confirmed?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Payment Confirmed?": {
+            "main": [
+                [
+                    {
+                        "node": "Payment Success",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Payment Failed",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

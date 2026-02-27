@@ -1,0 +1,192 @@
+{
+    "name": "10 — Surge Pricing Update",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "*/15 * * * *"
+                        }
+                    ]
+                }
+            },
+            "id": "cron-surge",
+            "name": "Every 15 Minutes",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/orders/?status=PICKUP_SCHEDULED",
+                "method": "GET",
+                "options": {}
+            },
+            "id": "get-active-orders",
+            "name": "Get Active Orders",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/riders/?status=ON_DUTY",
+                "method": "GET",
+                "options": {}
+            },
+            "id": "get-available-riders",
+            "name": "Get Available Riders",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                420
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const orders = $('Get Active Orders').item.json;\nconst riders = $('Get Available Riders').item.json;\n\nconst activeCount = Array.isArray(orders) ? orders.length : 0;\nconst riderCount = Array.isArray(riders) ? riders.length : 0;\n\nlet multiplier = 1.0;\nlet reason = null;\n\nif (riderCount === 0) {\n  multiplier = 1.6;\n  reason = 'No riders available';\n} else {\n  const ratio = activeCount / riderCount;\n  if (ratio >= 6) { multiplier = 1.6; reason = `Extreme demand (ratio: ${ratio.toFixed(1)})` }\n  else if (ratio >= 4) { multiplier = 1.4; reason = `High demand (ratio: ${ratio.toFixed(1)})` }\n  else if (ratio >= 2) { multiplier = 1.2; reason = `Moderate demand (ratio: ${ratio.toFixed(1)})` }\n}\n\nreturn [{ json: {\n  active_orders: activeCount,\n  available_riders: riderCount,\n  ratio: riderCount > 0 ? (activeCount / riderCount).toFixed(2) : 'Infinity',\n  surge_multiplier: multiplier,\n  reason: reason,\n  updated_at: new Date().toISOString()\n}}];"
+            },
+            "id": "calculate-surge",
+            "name": "Calculate Surge",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "={{ $json.surge_multiplier }}",
+                            "operation": "larger",
+                            "value2": 1
+                        }
+                    ]
+                }
+            },
+            "id": "is-surge",
+            "name": "Surge Active?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                910,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { action: 'surge_active', ...($json) } }];"
+            },
+            "id": "log-surge",
+            "name": "Log Surge",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                1130,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { action: 'no_surge', multiplier: 1.0 } }];"
+            },
+            "id": "no-surge",
+            "name": "Normal Pricing",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                1130,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Every 15 Minutes": {
+            "main": [
+                [
+                    {
+                        "node": "Get Active Orders",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Get Available Riders",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Active Orders": {
+            "main": [
+                [
+                    {
+                        "node": "Calculate Surge",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Available Riders": {
+            "main": [
+                [
+                    {
+                        "node": "Calculate Surge",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Calculate Surge": {
+            "main": [
+                [
+                    {
+                        "node": "Surge Active?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Surge Active?": {
+            "main": [
+                [
+                    {
+                        "node": "Log Surge",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Normal Pricing",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

@@ -1,0 +1,187 @@
+{
+    "name": "06 — Delivery Tracking",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "delivery-update",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "webhook-tracking",
+            "name": "Webhook: Delivery Update",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/orders/{{ $json.body.order_id }}/status",
+                "method": "PATCH",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "status",
+                            "value": "={{ $json.body.status }}"
+                        },
+                        {
+                            "name": "actor_type",
+                            "value": "RIDER"
+                        },
+                        {
+                            "name": "actor_id",
+                            "value": "={{ $json.body.rider_id }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "update-order-status",
+            "name": "Update Order Status",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/orders/{{ $json.body.order_id }}",
+                "method": "GET",
+                "options": {}
+            },
+            "id": "get-order-details",
+            "name": "Get Order Details",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $('Webhook: Delivery Update').item.json.body.status }}",
+                            "operation": "equal",
+                            "value2": "DELIVERED"
+                        }
+                    ]
+                }
+            },
+            "id": "is-delivered",
+            "name": "Is Delivered?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                910,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/webhooks/return-trip-check",
+                "method": "POST",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "rider_id",
+                            "value": "={{ $('Webhook: Delivery Update').item.json.body.rider_id }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "check-return-trip",
+            "name": "Check Return-Trip Pickups",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                1130,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'tracking_updated', new_status: $('Webhook: Delivery Update').item.json.body.status } }];"
+            },
+            "id": "tracking-updated",
+            "name": "Status Updated",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                1130,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Delivery Update": {
+            "main": [
+                [
+                    {
+                        "node": "Update Order Status",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Order Status": {
+            "main": [
+                [
+                    {
+                        "node": "Get Order Details",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Order Details": {
+            "main": [
+                [
+                    {
+                        "node": "Is Delivered?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Is Delivered?": {
+            "main": [
+                [
+                    {
+                        "node": "Check Return-Trip Pickups",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Status Updated",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

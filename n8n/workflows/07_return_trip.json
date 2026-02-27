@@ -1,0 +1,142 @@
+{
+    "name": "07 — Return-Trip Pickups",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "return-trip",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "webhook-return",
+            "name": "Webhook: Return Trip",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/webhooks/return-trip-check",
+                "method": "POST",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "rider_id",
+                            "value": "={{ $json.body.rider_id }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "check-return-pickups",
+            "name": "Check Nearby Pickups",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "={{ $json.eligible_pickups.length }}",
+                            "operation": "larger",
+                            "value2": 0
+                        }
+                    ]
+                }
+            },
+            "id": "has-pickups",
+            "name": "Any Eligible?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const pickups = $json.eligible_pickups;\nlet message = '📦 Return-Trip Pickup Available!\\n\\n';\nfor (const p of pickups.slice(0, 3)) {\n  message += `📍 ${p.address} (+${p.detour_km}km detour, +₹20 bonus)\\n`;\n}\nreturn [{ json: { message, count: pickups.length, rider_id: $('Webhook: Return Trip').item.json.body.rider_id } }];"
+            },
+            "id": "build-pickup-offer",
+            "name": "Build Pickup Offer",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'no_pickups', message: 'No nearby pickups. Rider heading to warehouse.' } }];"
+            },
+            "id": "no-pickups",
+            "name": "No Pickups",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Return Trip": {
+            "main": [
+                [
+                    {
+                        "node": "Check Nearby Pickups",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Nearby Pickups": {
+            "main": [
+                [
+                    {
+                        "node": "Any Eligible?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Any Eligible?": {
+            "main": [
+                [
+                    {
+                        "node": "Build Pickup Offer",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "No Pickups",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

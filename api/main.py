@@ -1,48 +1,55 @@
-from __future__ import annotations
+"""
+TeleporterBot v2 — FastAPI Backend
+Hub-and-Spoke Logistics Management System
+"""
 
-import uvicorn
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.db.database import engine
-from api.models.base import Base
-from api.routers import orders, payments, riders, users, warehouses, webhooks
+from config import settings
+from db.database import engine, Base
+from routers import orders, riders, users, payments, admin, warehouses, webhooks
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="TeleporterBot API", version="0.1.0")
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    app.include_router(users.router)
-    app.include_router(riders.router)
-    app.include_router(warehouses.router)
-    app.include_router(orders.router)
-    app.include_router(payments.router)
-    app.include_router(webhooks.router)
-
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        # Ensure metadata is bound so Alembic or manual migrations can run
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    @app.get("/")
-    async def root():
-        return {"message": "TeleporterBot API running"}
-
-    return app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events."""
+    # Startup
+    print("🚀 TeleporterBot API starting...")
+    yield
+    # Shutdown
+    await engine.dispose()
+    print("🛑 TeleporterBot API shut down.")
 
 
-app = create_app()
+app = FastAPI(
+    title="TeleporterBot Logistics API",
+    description="Hub-and-Spoke delivery management system backend",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+# ── CORS ───────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routers ────────────────────────────────────────────────
+app.include_router(users.router, prefix="/api/users", tags=["Users"])
+app.include_router(orders.router, prefix="/api/orders", tags=["Orders"])
+app.include_router(riders.router, prefix="/api/riders", tags=["Riders"])
+app.include_router(warehouses.router, prefix="/api/warehouses", tags=["Warehouses"])
+app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
+app.include_router(admin.router, prefix="/api/admin", tags=["Admin Dashboard"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["n8n Webhooks"])
 
 
-if __name__ == "__main__":
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
-
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "TeleporterBot API v2"}

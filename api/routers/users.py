@@ -1,38 +1,56 @@
-from __future__ import annotations
+"""User management API endpoints."""
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+import uuid
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.database import get_db
-from api.models.user import User
+from db.database import get_db
+from models.user import User
+from schemas import UserCreate, UserResponse
 
-router = APIRouter(prefix="/users", tags=["users"])
-
-
-class UserCreate(BaseModel):
-    telegram_id: int | None = None
-    full_name: str | None = None
-    phone: str | None = None
+router = APIRouter()
 
 
-@router.post("")
-async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
+@router.post("/", response_model=UserResponse)
+async def create_or_get_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
+    """Create a new user or return existing one (by telegram_id)."""
+    result = await db.execute(
+        select(User).where(User.telegram_id == data.telegram_id)
+    )
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        return existing
+
     user = User(
-        telegram_id=body.telegram_id,
-        full_name=body.full_name,
-        phone=body.phone,
+        telegram_id=data.telegram_id,
+        full_name=data.full_name,
+        phone=data.phone,
+        telegram_username=data.telegram_username,
     )
     db.add(user)
-    await db.commit()
+    await db.flush()
     await db.refresh(user)
     return user
 
 
-@router.get("/by-telegram/{telegram_id}")
-async def get_by_telegram(telegram_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+@router.get("/{telegram_id}", response_model=UserResponse)
+async def get_user_by_telegram(telegram_id: int, db: AsyncSession = Depends(get_db)):
+    """Get user by Telegram ID."""
+    result = await db.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
     user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     return user
 
+
+@router.get("/", response_model=list[UserResponse])
+async def list_users(skip: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+    """List all users (paginated)."""
+    result = await db.execute(
+        select(User).offset(skip).limit(limit).order_by(User.created_at.desc())
+    )
+    return result.scalars().all()

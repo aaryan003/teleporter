@@ -1,0 +1,160 @@
+{
+    "name": "04 — Warehouse Intake",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "warehouse-intake",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "webhook-intake",
+            "name": "Webhook: Warehouse Intake",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/webhooks/warehouse-intake",
+                "method": "POST",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "order_ids",
+                            "value": "={{ $json.body.order_ids }}"
+                        },
+                        {
+                            "name": "warehouse_id",
+                            "value": "={{ $json.body.warehouse_id }}"
+                        },
+                        {
+                            "name": "rider_id",
+                            "value": "={{ $json.body.rider_id }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "process-intake",
+            "name": "Process Warehouse Intake",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "boolean": [
+                        {
+                            "value1": "={{ $json.optimization_triggered }}",
+                            "value2": true
+                        }
+                    ]
+                }
+            },
+            "id": "check-batch",
+            "name": "Batch Threshold Met?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/webhooks/optimize-routes",
+                "method": "POST",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "warehouse_id",
+                            "value": "={{ $('Webhook: Warehouse Intake').item.json.body.warehouse_id }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "trigger-optimization",
+            "name": "Trigger Route Optimization",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                910,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'waiting', message: `${$json.warehouse_load} parcels at warehouse, waiting for batch threshold` } }];"
+            },
+            "id": "wait-for-batch",
+            "name": "Wait for More Parcels",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Warehouse Intake": {
+            "main": [
+                [
+                    {
+                        "node": "Process Warehouse Intake",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Process Warehouse Intake": {
+            "main": [
+                [
+                    {
+                        "node": "Batch Threshold Met?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Batch Threshold Met?": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger Route Optimization",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Wait for More Parcels",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

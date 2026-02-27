@@ -1,0 +1,204 @@
+{
+    "name": "01 — Order Intake",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "order-intake",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "webhook-order-intake",
+            "name": "Webhook: Order Intake",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.body.pickup_address }}",
+                            "operation": "isNotEmpty"
+                        },
+                        {
+                            "value1": "={{ $json.body.drop_address }}",
+                            "operation": "isNotEmpty"
+                        }
+                    ]
+                }
+            },
+            "id": "validate-order",
+            "name": "Validate Order Data",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/orders/",
+                "method": "POST",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "telegram_id",
+                            "value": "={{ $json.body.telegram_id }}"
+                        },
+                        {
+                            "name": "pickup_address",
+                            "value": "={{ $json.body.pickup_address }}"
+                        },
+                        {
+                            "name": "drop_address",
+                            "value": "={{ $json.body.drop_address }}"
+                        },
+                        {
+                            "name": "weight_tier",
+                            "value": "={{ $json.body.weight_tier || 'LIGHT' }}"
+                        },
+                        {
+                            "name": "is_express",
+                            "value": "={{ $json.body.is_express || false }}"
+                        },
+                        {
+                            "name": "is_batch_eligible",
+                            "value": "={{ $json.body.is_batch_eligible || true }}"
+                        },
+                        {
+                            "name": "payment_mode",
+                            "value": "={{ $json.body.payment_mode || 'COD' }}"
+                        },
+                        {
+                            "name": "idempotency_key",
+                            "value": "={{ $json.body.idempotency_key }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "create-order-api",
+            "name": "Create Order via API",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                690,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/payments/confirm/{{ $json.id }}?payment_mode={{ $('Webhook: Order Intake').item.json.body.payment_mode || 'COD' }}",
+                "method": "POST",
+                "options": {}
+            },
+            "id": "confirm-payment",
+            "name": "Confirm Payment",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                910,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{ JSON.stringify({ status: 'ok', order_id: $('Create Order via API').item.json.id, order_number: $('Create Order via API').item.json.order_number, payment_status: $json.status }) }}"
+            },
+            "id": "respond-success",
+            "name": "Respond Success",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                1130,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "{\"status\": \"error\", \"message\": \"Missing pickup or drop address\"}",
+                "options": {
+                    "responseCode": 400
+                }
+            },
+            "id": "respond-error",
+            "name": "Respond Validation Error",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                690,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Order Intake": {
+            "main": [
+                [
+                    {
+                        "node": "Validate Order Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Validate Order Data": {
+            "main": [
+                [
+                    {
+                        "node": "Create Order via API",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Respond Validation Error",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Create Order via API": {
+            "main": [
+                [
+                    {
+                        "node": "Confirm Payment",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Confirm Payment": {
+            "main": [
+                [
+                    {
+                        "node": "Respond Success",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

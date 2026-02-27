@@ -1,77 +1,143 @@
+"""Order and OrderEvent ORM models — hub-and-spoke lifecycle."""
+
 import uuid
-
-from sqlalchemy import Column, Numeric, String
-from sqlalchemy.dialects.postgresql import ENUM, TIMESTAMP, UUID
-
-from api.models.base import Base
-
-
-order_status_enum = ENUM(
-    "ORDER_PLACED",
-    "PAYMENT_CONFIRMED",
-    "PICKUP_SCHEDULED",
-    "PICKUP_RIDER_ASSIGNED",
-    "PICKUP_EN_ROUTE",
-    "PICKED_UP",
-    "IN_TRANSIT_TO_WAREHOUSE",
-    "AT_WAREHOUSE",
-    "ROUTE_OPTIMIZED",
-    "DELIVERY_RIDER_ASSIGNED",
-    "OUT_FOR_DELIVERY",
-    "DELIVERED",
-    "COMPLETED",
-    "CANCELLED",
-    "REFUNDED",
-    name="order_status",
-    create_type=False,
+from datetime import datetime
+from sqlalchemy import (
+    String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text,
+    Enum as PgEnum,
 )
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from db.database import Base
 
 
 class Order(Base):
     __tablename__ = "orders"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    order_number = Column(String(20), unique=True, nullable=False)
-    user_id = Column(UUID(as_uuid=True), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    order_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
 
-    pickup_rider_id = Column(UUID(as_uuid=True), nullable=True)
-    pickup_slot = Column(TIMESTAMP, nullable=True)
-    pickup_address = Column(String, nullable=False)
-    pickup_lat = Column(String, nullable=True)
-    pickup_lng = Column(String, nullable=True)
-    pickup_otp = Column(String(6), nullable=True)
-    pickup_confirmed_at = Column(TIMESTAMP, nullable=True)
+    # Pickup phase
+    pickup_rider_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("riders.id"))
+    pickup_slot: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pickup_address: Mapped[str] = mapped_column(Text, nullable=False)
+    pickup_lat: Mapped[float | None] = mapped_column(Numeric(10, 7))
+    pickup_lng: Mapped[float | None] = mapped_column(Numeric(10, 7))
+    pickup_otp_hash: Mapped[str | None] = mapped_column(String(128))
+    pickup_otp_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    pickup_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    warehouse_id = Column(UUID(as_uuid=True), nullable=True)
-    warehouse_received_at = Column(TIMESTAMP, nullable=True)
+    # Warehouse phase
+    warehouse_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("warehouses.id"))
+    warehouse_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    delivery_rider_id = Column(UUID(as_uuid=True), nullable=True)
-    delivery_route_id = Column(UUID(as_uuid=True), nullable=True)
-    drop_address = Column(String, nullable=False)
-    drop_lat = Column(String, nullable=True)
-    drop_lng = Column(String, nullable=True)
-    drop_otp = Column(String(6), nullable=True)
+    # Delivery phase
+    delivery_rider_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("riders.id"))
+    delivery_route_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("delivery_routes.id"))
+    drop_address: Mapped[str] = mapped_column(Text, nullable=False)
+    drop_lat: Mapped[float | None] = mapped_column(Numeric(10, 7))
+    drop_lng: Mapped[float | None] = mapped_column(Numeric(10, 7))
+    drop_otp_hash: Mapped[str | None] = mapped_column(String(128))
+    drop_otp_attempts: Mapped[int] = mapped_column(Integer, default=0)
 
-    weight_kg = Column(Numeric(5, 2), nullable=True)
-    weight_tier = Column(String(10), nullable=True)
-    vehicle_type = Column(String(20), nullable=True)
+    # Package info
+    weight_kg: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    weight: Mapped[str] = mapped_column(
+        PgEnum("LIGHT", "MEDIUM", "HEAVY", name="weight_tier", create_type=False),
+        default="LIGHT",
+    )
+    vehicle: Mapped[str] = mapped_column(
+        PgEnum("BIKE", "AUTO", "VAN", name="vehicle_type", create_type=False),
+        default="BIKE",
+    )
+    description: Mapped[str | None] = mapped_column(Text)
 
-    distance_km = Column(Numeric(8, 2), nullable=True)
-    base_cost = Column(Numeric(10, 2), nullable=True)
-    surge_multiplier = Column(Numeric(3, 2), nullable=False, default=1.00)
-    addons_cost = Column(Numeric(10, 2), nullable=False, default=0)
-    total_cost = Column(Numeric(10, 2), nullable=True)
+    # Pricing
+    distance_km: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    duration_min: Mapped[int | None] = mapped_column(Integer)
+    base_cost: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    surge_multiplier: Mapped[float] = mapped_column(Numeric(3, 2), default=1.00)
+    addons_cost: Mapped[float] = mapped_column(Numeric(10, 2), default=0.00)
+    batch_discount: Mapped[float] = mapped_column(Numeric(10, 2), default=0.00)
+    subscription_discount: Mapped[float] = mapped_column(Numeric(10, 2), default=0.00)
+    total_cost: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
 
-    status = Column(order_status_enum, nullable=False, default="ORDER_PLACED")
-    is_express = Column(String, nullable=False, default="false")
-    is_batch_eligible = Column(String, nullable=False, default="true")
-    is_return_trip_pickup = Column(String, nullable=False, default="false")
+    # Status and flags
+    status: Mapped[str] = mapped_column(
+        PgEnum(
+            "ORDER_PLACED", "PAYMENT_CONFIRMED", "PICKUP_SCHEDULED",
+            "PICKUP_RIDER_ASSIGNED", "PICKUP_EN_ROUTE", "PICKED_UP",
+            "IN_TRANSIT_TO_WAREHOUSE", "AT_WAREHOUSE",
+            "ROUTE_OPTIMIZED", "DELIVERY_RIDER_ASSIGNED", "OUT_FOR_DELIVERY",
+            "DELIVERED", "COMPLETED", "CANCELLED", "REFUNDED",
+            name="order_status", create_type=False,
+        ),
+        default="ORDER_PLACED",
+    )
+    payment: Mapped[str] = mapped_column(
+        PgEnum("PENDING", "PAID", "REFUNDED", "FAILED", name="payment_status", create_type=False),
+        default="PENDING",
+    )
+    is_express: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_batch_eligible: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_return_trip_pickup: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    payment_status = Column(String(20), nullable=False, default="PENDING")
-    razorpay_order_id = Column(String(255), nullable=True)
+    # Payment method & references
+    payment_mode: Mapped[str] = mapped_column(
+        PgEnum("COD", "CARD", "UPI", name="payment_mode", create_type=False),
+        default="COD",
+    )
+    razorpay_order_id: Mapped[str | None] = mapped_column(String(255))   # kept for future
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(255)) # kept for future
 
-    created_at = Column(TIMESTAMP, nullable=False)
-    updated_at = Column(TIMESTAMP, nullable=False)
-    delivered_at = Column(TIMESTAMP, nullable=True)
-    cancelled_at = Column(TIMESTAMP, nullable=True)
+    # Idempotency
+    idempotency_key: Mapped[uuid.UUID | None] = mapped_column(unique=True)
 
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Relationships
+    user = relationship("User", back_populates="orders", lazy="selectin")
+    pickup_rider = relationship("Rider", foreign_keys=[pickup_rider_id], lazy="selectin")
+    delivery_rider = relationship("Rider", foreign_keys=[delivery_rider_id], lazy="selectin")
+    warehouse = relationship("Warehouse", lazy="selectin")
+    delivery_route = relationship("DeliveryRoute", back_populates="orders", lazy="selectin")
+    events = relationship("OrderEvent", back_populates="order", lazy="selectin", order_by="OrderEvent.created_at")
+
+
+class OrderEvent(Base):
+    __tablename__ = "order_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(
+        PgEnum(
+            "ORDER_PLACED", "PAYMENT_CONFIRMED", "PICKUP_SCHEDULED",
+            "PICKUP_RIDER_ASSIGNED", "PICKUP_EN_ROUTE", "PICKED_UP",
+            "IN_TRANSIT_TO_WAREHOUSE", "AT_WAREHOUSE",
+            "ROUTE_OPTIMIZED", "DELIVERY_RIDER_ASSIGNED", "OUT_FOR_DELIVERY",
+            "DELIVERED", "COMPLETED", "CANCELLED", "REFUNDED",
+            name="order_status", create_type=False,
+        ),
+    )
+    to_status: Mapped[str] = mapped_column(
+        PgEnum(
+            "ORDER_PLACED", "PAYMENT_CONFIRMED", "PICKUP_SCHEDULED",
+            "PICKUP_RIDER_ASSIGNED", "PICKUP_EN_ROUTE", "PICKED_UP",
+            "IN_TRANSIT_TO_WAREHOUSE", "AT_WAREHOUSE",
+            "ROUTE_OPTIMIZED", "DELIVERY_RIDER_ASSIGNED", "OUT_FOR_DELIVERY",
+            "DELIVERED", "COMPLETED", "CANCELLED", "REFUNDED",
+            name="order_status", create_type=False,
+        ),
+        nullable=False,
+    )
+    actor_type: Mapped[str] = mapped_column(String(20), nullable=False)  # USER, RIDER, SYSTEM, N8N
+    actor_id: Mapped[uuid.UUID | None] = mapped_column()
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", type_=type(None))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    # Relationships
+    order = relationship("Order", back_populates="events")

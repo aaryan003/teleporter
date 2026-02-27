@@ -1,0 +1,135 @@
+{
+    "name": "05 — Route Optimizer",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "route-optimizer",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "webhook-optimizer",
+            "name": "Webhook: Route Optimizer",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/webhooks/optimize-routes?warehouse_id={{ $json.body.warehouse_id }}",
+                "method": "POST",
+                "options": {
+                    "timeout": 30000
+                }
+            },
+            "id": "run-vrp",
+            "name": "Run VRP Optimizer",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "={{ $json.routes_created }}",
+                            "operation": "larger",
+                            "value2": 0
+                        }
+                    ]
+                }
+            },
+            "id": "routes-created",
+            "name": "Routes Created?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const routes = $json.routes;\nlet summary = `🚚 ${routes.length} routes optimized:\\n`;\nfor (const r of routes) {\n  summary += `• ${r.rider}: ${r.parcels} parcels, ${r.distance_km}km (saved ${r.savings_km}km)\\n`;\n}\nreturn [{ json: { summary, routes_count: routes.length } }];"
+            },
+            "id": "build-summary",
+            "name": "Build Route Summary",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'no_parcels', message: 'No parcels to optimize at this warehouse' } }];"
+            },
+            "id": "no-parcels",
+            "name": "No Parcels",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Route Optimizer": {
+            "main": [
+                [
+                    {
+                        "node": "Run VRP Optimizer",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Run VRP Optimizer": {
+            "main": [
+                [
+                    {
+                        "node": "Routes Created?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Routes Created?": {
+            "main": [
+                [
+                    {
+                        "node": "Build Route Summary",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "No Parcels",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

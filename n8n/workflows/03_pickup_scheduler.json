@@ -1,0 +1,176 @@
+{
+    "name": "03 — Pickup Scheduler",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "pickup-scheduler",
+                "responseMode": "lastNode",
+                "options": {}
+            },
+            "id": "webhook-pickup",
+            "name": "Webhook: Schedule Pickup",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/riders/?status=ON_DUTY",
+                "method": "GET",
+                "options": {}
+            },
+            "id": "get-available-riders",
+            "name": "Get Available Riders",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "={{ $json.length }}",
+                            "operation": "larger",
+                            "value2": 0
+                        }
+                    ]
+                }
+            },
+            "id": "check-riders-available",
+            "name": "Riders Available?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const riders = $input.all();\nconst order = $('Webhook: Schedule Pickup').item.json.body;\n\n// Pick rider with lowest current load\nlet bestRider = riders[0].json;\nfor (const r of riders) {\n  if (r.json.current_load < bestRider.current_load) {\n    bestRider = r.json;\n  }\n}\n\nreturn [{ json: { rider_id: bestRider.id, rider_name: bestRider.full_name, rider_telegram: bestRider.telegram_id, order_id: order.order_id } }];"
+            },
+            "id": "assign-rider",
+            "name": "Select Best Rider",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://api:8000/api/orders/{{ $json.order_id }}/status",
+                "method": "PATCH",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "status",
+                            "value": "PICKUP_RIDER_ASSIGNED"
+                        },
+                        {
+                            "name": "actor_type",
+                            "value": "N8N"
+                        },
+                        {
+                            "name": "metadata",
+                            "value": "={{ JSON.stringify({ rider_id: $json.rider_id }) }}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "assign-pickup-rider",
+            "name": "Assign Pickup Rider",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                1130,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'no_riders', message: 'No riders available for pickup. Order queued.' } }];"
+            },
+            "id": "no-riders",
+            "name": "No Riders — Queue",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook: Schedule Pickup": {
+            "main": [
+                [
+                    {
+                        "node": "Get Available Riders",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Available Riders": {
+            "main": [
+                [
+                    {
+                        "node": "Riders Available?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Riders Available?": {
+            "main": [
+                [
+                    {
+                        "node": "Select Best Rider",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "No Riders — Queue",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Select Best Rider": {
+            "main": [
+                [
+                    {
+                        "node": "Assign Pickup Rider",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

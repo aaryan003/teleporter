@@ -1,0 +1,160 @@
+{
+    "name": "09 — Rider Health Check",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "*/30 * * * *"
+                        }
+                    ]
+                }
+            },
+            "id": "cron-health",
+            "name": "Every 30 Minutes",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/admin/fleet-summary",
+                "method": "GET",
+                "options": {}
+            },
+            "id": "get-fleet",
+            "name": "Get Fleet Summary",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const fleet = $json;\nconst alerts = [];\n\n// Alert if no riders on duty during business hours\nconst hour = new Date().getHours();\nif (hour >= 8 && hour < 20 && fleet.on_duty === 0) {\n  alerts.push('🚨 CRITICAL: No riders on duty during business hours!');\n}\n\n// Alert if utilization is over 90%\nconst busy = fleet.on_delivery + fleet.on_pickup;\nconst total = fleet.on_duty + busy;\nif (total > 0 && (busy / total) > 0.9) {\n  alerts.push(`⚠️ High utilization: ${busy}/${total} riders busy (${Math.round(busy/total*100)}%)`);\n}\n\n// Alert if any rider has been on delivery for too long (simplified)\nif (fleet.on_delivery > fleet.total * 0.7) {\n  alerts.push(`⚠️ ${fleet.on_delivery} riders stuck on delivery status`);\n}\n\nreturn [{ json: { fleet_status: fleet, alerts, has_alerts: alerts.length > 0 } }];"
+            },
+            "id": "analyze-health",
+            "name": "Analyze Fleet Health",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "boolean": [
+                        {
+                            "value1": "={{ $json.has_alerts }}",
+                            "value2": true
+                        }
+                    ]
+                }
+            },
+            "id": "has-alerts",
+            "name": "Has Alerts?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                910,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const alerts = $json.alerts;\n// In production: send Telegram message to admin\nreturn [{ json: { action: 'admin_notified', alerts } }];"
+            },
+            "id": "notify-admin",
+            "name": "Notify Admin",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                1130,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "return [{ json: { status: 'healthy', message: 'Fleet operating normally' } }];"
+            },
+            "id": "all-good",
+            "name": "All Good",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                1130,
+                420
+            ]
+        }
+    ],
+    "connections": {
+        "Every 30 Minutes": {
+            "main": [
+                [
+                    {
+                        "node": "Get Fleet Summary",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Fleet Summary": {
+            "main": [
+                [
+                    {
+                        "node": "Analyze Fleet Health",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Analyze Fleet Health": {
+            "main": [
+                [
+                    {
+                        "node": "Has Alerts?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Has Alerts?": {
+            "main": [
+                [
+                    {
+                        "node": "Notify Admin",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "All Good",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}

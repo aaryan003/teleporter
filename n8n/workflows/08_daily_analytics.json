@@ -1,0 +1,113 @@
+{
+    "name": "08 — Daily AI Analytics",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 22 * * *"
+                        }
+                    ]
+                }
+            },
+            "id": "cron-analytics",
+            "name": "Daily 10 PM Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/admin/stats",
+                "method": "GET",
+                "options": {}
+            },
+            "id": "get-kpis",
+            "name": "Get Dashboard KPIs",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                470,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://api:8000/api/admin/insights/generate",
+                "method": "POST",
+                "options": {
+                    "timeout": 30000
+                }
+            },
+            "id": "generate-insights",
+            "name": "Generate AI Insights",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                690,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const kpis = $('Get Dashboard KPIs').item.json;\nconst insights = $json;\n\nconst summary = `📊 Daily Report (${new Date().toLocaleDateString()})\\n\\n` +\n  `📦 Orders Today: ${kpis.orders_today}\\n` +\n  `💰 Revenue Today: ₹${kpis.revenue_today}\\n` +\n  `🚴 Active Riders: ${kpis.active_riders}\\n` +\n  `✅ Delivered: ${kpis.orders_delivered}\\n` +\n  `❌ Cancelled: ${kpis.orders_cancelled}\\n\\n` +\n  `🤖 AI Insights Generated: ${insights.generated}`;\n\nreturn [{ json: { summary, kpis, insights_count: insights.generated } }];"
+            },
+            "id": "build-report",
+            "name": "Build Daily Report",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                910,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Daily 10 PM Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Get Dashboard KPIs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Dashboard KPIs": {
+            "main": [
+                [
+                    {
+                        "node": "Generate AI Insights",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate AI Insights": {
+            "main": [
+                [
+                    {
+                        "node": "Build Daily Report",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "tags": [
+        {
+            "name": "TeleporterBot"
+        }
+    ]
+}
