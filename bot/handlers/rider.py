@@ -211,12 +211,12 @@ async def verify_rider_otp(message: Message, state: FSMContext):
 async def accept_return_pickup(callback: CallbackQuery):
     """Rider accepts a return-trip pickup."""
     order_id = callback.data.replace("return_accept_", "")
-    await callback.answer("Pickup accepted! Bonus ₹20 added.")
+    await callback.answer("Pickup accepted! Bonus $5 added.")
 
     await callback.message.edit_text(
         f"📦 <b>Return-Trip Pickup Accepted!</b>\n\n"
         f"Order: <code>{order_id[:8]}</code>\n"
-        f"💰 Bonus: ₹20\n\n"
+        f"💰 Bonus: $5\n\n"
         f"Navigate to pickup and collect the parcel on your way back.",
     )
 

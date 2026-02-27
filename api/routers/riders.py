@@ -56,6 +56,16 @@ async def list_riders(
     return result.scalars().all()
 
 
+@router.get("/telegram/{telegram_id}", response_model=RiderResponse)
+async def get_rider_by_telegram(telegram_id: int, db: AsyncSession = Depends(get_db)):
+    """Get rider by Telegram ID."""
+    result = await db.execute(select(Rider).where(Rider.telegram_id == telegram_id))
+    rider = result.scalar_one_or_none()
+    if not rider:
+        raise HTTPException(status_code=404, detail="Rider not found")
+    return rider
+
+
 @router.get("/{rider_id}", response_model=RiderResponse)
 async def get_rider(rider_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Get rider by ID."""
@@ -64,6 +74,7 @@ async def get_rider(rider_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     if not rider:
         raise HTTPException(status_code=404, detail="Rider not found")
     return rider
+
 
 
 @router.patch("/{rider_id}/location")

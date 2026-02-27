@@ -19,6 +19,7 @@ _http: httpx.AsyncClient | None = None
 
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 DISTANCE_URL = "https://maps.googleapis.com/maps/api/distancematrix/json"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
 # Cache TTLs
 GEOCODE_CACHE_TTL = 30 * 24 * 3600   # 30 days
@@ -81,7 +82,8 @@ def estimate_duration(distance_km: float, avg_speed_kmh: float = 25.0) -> int:
 
 async def geocode(address: str) -> dict | None:
     """
-    Geocode an address to lat/lng. Uses Redis cache first.
+    Geocode an address to lat/lng. Uses Redis cache first,
+    then Google Maps, then Nominatim (OSM) as free fallback.
 
     Returns:
         {"lat": float, "lng": float, "formatted": str} or None
@@ -98,42 +100,79 @@ async def geocode(address: str) -> dict | None:
             "formatted": cached.get("formatted", address),
         }
 
-    # Call Google Maps
-    if not settings.GOOGLE_MAPS_API_KEY:
-        return None
+    result = None
 
-    try:
-        http = await _get_http()
-        resp = await http.get(GEOCODE_URL, params={
-            "address": address,
-            "key": settings.GOOGLE_MAPS_API_KEY,
-        })
-        data = resp.json()
+    # ── Try Google Maps ─────────────────────────────────────
+    if settings.GOOGLE_MAPS_API_KEY:
+        try:
+            http = await _get_http()
+            resp = await http.get(GEOCODE_URL, params={
+                "address": address,
+                "key": settings.GOOGLE_MAPS_API_KEY,
+            })
+            data = resp.json()
+            status = data.get("status")
 
-        if data.get("status") != "OK" or not data.get("results"):
-            return None
+            if status == "OK" and data.get("results"):
+                loc = data["results"][0]["geometry"]["location"]
+                result = {
+                    "lat": loc["lat"],
+                    "lng": loc["lng"],
+                    "formatted": data["results"][0].get("formatted_address", address),
+                }
+            else:
+                # Log the real reason so we can debug API key issues
+                print(f"⚠️ Google geocode failed for '{address}': status={status}, "
+                      f"error={data.get('error_message', 'none')}")
+        except Exception as e:
+            print(f"⚠️ Google geocode exception: {e}")
 
-        result = data["results"][0]
-        location = result["geometry"]["location"]
-        formatted = result.get("formatted_address", address)
+    # ── Nominatim fallback (free, no key needed) ─────────────
+    # Tries full address first, then progressively strips leading tokens
+    # to handle hyper-local addresses OSM doesn't index (e.g. apartment names)
+    if result is None:
+        try:
+            http = await _get_http()
+            parts = address.replace(",", " ").split()
+            # Build candidate queries: full → drop 1st token → drop 2nd → etc.
+            candidates = [address]
+            for i in range(1, min(4, len(parts))):
+                shorter = " ".join(parts[i:])
+                if len(shorter) > 5:
+                    candidates.append(shorter)
 
-        # Cache result
+            for q in candidates:
+                resp = await http.get(NOMINATIM_URL, params={
+                    "q": q,
+                    "format": "json",
+                    "limit": 1,
+                    "addressdetails": 1,
+                    "countrycodes": "in",
+                }, headers={"User-Agent": "TeleporterBot/2.0 (logistics@teleporter.app)"})
+                hits = resp.json()
+                if hits:
+                    result = {
+                        "lat": float(hits[0]["lat"]),
+                        "lng": float(hits[0]["lon"]),
+                        "formatted": hits[0].get("display_name", address),
+                    }
+                    print(f"✅ Nominatim geocoded '{q}' → {result['lat']:.4f},{result['lng']:.4f}")
+                    break
+            else:
+                print(f"⚠️ Nominatim: no results for '{address}' (all variants tried)")
+        except Exception as e:
+            print(f"⚠️ Nominatim geocode exception: {e}")
+
+    # ── Cache successful result ──────────────────────────────
+    if result:
         await r.hset(cache_key, mapping={
-            "lat": str(location["lat"]),
-            "lng": str(location["lng"]),
-            "formatted": formatted,
+            "lat": str(result["lat"]),
+            "lng": str(result["lng"]),
+            "formatted": result["formatted"],
         })
         await r.expire(cache_key, GEOCODE_CACHE_TTL)
 
-        return {
-            "lat": location["lat"],
-            "lng": location["lng"],
-            "formatted": formatted,
-        }
-
-    except Exception as e:
-        print(f"⚠️ Geocoding error: {e}")
-        return None
+    return result
 
 
 # ── Distance Matrix ────────────────────────────────────────

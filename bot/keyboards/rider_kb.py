@@ -22,7 +22,7 @@ def rider_return_pickup_keyboard(order_id: str, detour_km: float) -> InlineKeybo
     """Offer return-trip pickup to rider."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"📦 Accept Pickup (+{detour_km}km, +₹20)",
+            text=f"📦 Accept Pickup (+{detour_km}km, +$5)",
             callback_data=f"return_accept_{order_id}",
         )],
         [InlineKeyboardButton(text="⏩ Skip, Head to Warehouse", callback_data="return_skip")],

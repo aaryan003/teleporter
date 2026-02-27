@@ -8,8 +8,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ── ENUM TYPES ────────────────────────────────────────────
 
-CREATE TYPE vehicle_type AS ENUM ('BIKE', 'AUTO', 'VAN');
-CREATE TYPE weight_tier AS ENUM ('LIGHT', 'MEDIUM', 'HEAVY');
+CREATE TYPE vehicle_type AS ENUM ('BIKE', 'MINI_VAN', 'MINI_TRUCK', 'TRUCK');
+CREATE TYPE package_size AS ENUM ('SMALL', 'MEDIUM', 'LARGE', 'BULKY');
 CREATE TYPE payment_mode AS ENUM ('COD', 'CARD', 'UPI');
 
 CREATE TYPE order_status AS ENUM (
@@ -136,8 +136,7 @@ CREATE TABLE orders (
     drop_otp_attempts INT DEFAULT 0,
 
     -- Package info
-    weight_kg DECIMAL(5, 2),
-    weight weight_tier DEFAULT 'LIGHT',
+    package_size package_size DEFAULT 'SMALL',
     vehicle vehicle_type DEFAULT 'BIKE',
     description TEXT,
 
@@ -159,7 +158,7 @@ CREATE TABLE orders (
     is_return_trip_pickup BOOLEAN DEFAULT FALSE,
 
     -- Payment method
-    pay_mode payment_mode DEFAULT 'COD',
+    payment_mode payment_mode DEFAULT 'COD',
     razorpay_order_id VARCHAR(255),
     razorpay_payment_id VARCHAR(255),
 
@@ -291,3 +290,12 @@ CREATE TRIGGER trg_riders_updated BEFORE UPDATE ON riders
 
 CREATE TRIGGER trg_orders_updated BEFORE UPDATE ON orders
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── RECIPIENT CONTACT (safe migration) ────────────────────
+-- These columns capture the drop-off recipient so the bot can
+-- forward their Drop-off OTP directly to them on Telegram.
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS drop_contact_name    VARCHAR(255);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS drop_contact_phone   VARCHAR(20);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS drop_contact_telegram_id BIGINT;
+

@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import get_db
 from models.order import Order, OrderEvent
 from models.user import User
+from models.rider import Rider
 from schemas import (
-    OrderCreate, OrderResponse, OrderStatusUpdate,
-    PriceEstimate, VehicleType, OTPVerifyRequest,
+    OrderCreate, OrderResponse, OrderStatusUpdate, OrderDetailResponse,
+    PriceEstimate, VehicleType, OTPVerifyRequest, OrderTrackingResponse,
     AvailableSlotsResponse, TimeSlot,
 )
 from services.pricing import calculate_price, determine_vehicle, calculate_surge
@@ -32,6 +33,13 @@ def _generate_order_number() -> str:
     date_part = now.strftime("%y%m%d")
     rand_part = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
     return f"DLV-{date_part}-{rand_part}"
+
+
+def _resolve_package_size(data: OrderCreate) -> str:
+    """Resolve package_size from the request, supporting backward compat weight_tier."""
+    if data.weight_tier:
+        return data.weight_tier.value
+    return data.package_size.value
 
 
 @router.post("/estimate", response_model=PriceEstimate)
@@ -59,12 +67,15 @@ async def estimate_price(data: OrderCreate, db: AsyncSession = Depends(get_db)):
     # Available riders count is simplified for estimate
     surge_mult, surge_reason = calculate_surge(active_orders, 5)  # Default 5 riders
 
+    # Resolve size
+    pkg_size = _resolve_package_size(data)
+
     # Calculate price
     time_factor = "EXPRESS" if data.is_express else "STANDARD"
     price = calculate_price(
         distance_km=dist["distance_km"],
         duration_min=dist["duration_min"],
-        weight_tier=data.weight_tier.value,
+        weight_tier=pkg_size,
         time_factor_key=time_factor,
         surge_multiplier=surge_mult,
         surge_reason=surge_reason,
@@ -112,6 +123,9 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
     if not pickup_geo or not drop_geo:
         raise HTTPException(status_code=400, detail="Could not geocode addresses")
 
+    # Resolve size
+    pkg_size = _resolve_package_size(data)
+
     # Distance & pricing
     dist = await get_distance(
         pickup_geo["lat"], pickup_geo["lng"],
@@ -122,12 +136,12 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
     price = calculate_price(
         distance_km=dist["distance_km"],
         duration_min=dist["duration_min"],
-        weight_tier=data.weight_tier.value,
+        weight_tier=pkg_size,
         time_factor_key=time_factor,
         is_batch_eligible=data.is_batch_eligible,
     )
 
-    vehicle = determine_vehicle(data.weight_tier.value)
+    vehicle = determine_vehicle(pkg_size)
 
     order = Order(
         order_number=_generate_order_number(),
@@ -138,8 +152,7 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
         drop_address=data.drop_address,
         drop_lat=drop_geo["lat"],
         drop_lng=drop_geo["lng"],
-        weight_kg=data.weight_kg,
-        weight=data.weight_tier.value,
+        package_size=pkg_size,
         vehicle=vehicle,
         description=data.description,
         distance_km=price.distance_km,
@@ -165,16 +178,6 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
 
     await db.flush()
     await db.refresh(order)
-    return order
-
-
-@router.get("/{order_id}", response_model=OrderResponse)
-async def get_order(order_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Get order by ID."""
-    result = await db.execute(select(Order).where(Order.id == order_id))
-    order = result.scalar_one_or_none()
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
     return order
 
 
@@ -272,8 +275,12 @@ async def verify_order_otp(data: OTPVerifyRequest, db: AsyncSession = Depends(ge
 
 
 @router.get("/user/{telegram_id}", response_model=list[OrderResponse])
-async def get_user_orders(telegram_id: int, db: AsyncSession = Depends(get_db)):
-    """Get all orders for a specific user."""
+async def get_user_orders(
+    telegram_id: int,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get recent orders for a specific user."""
     user_result = await db.execute(
         select(User).where(User.telegram_id == telegram_id)
     )
@@ -282,6 +289,83 @@ async def get_user_orders(telegram_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="User not found")
 
     result = await db.execute(
-        select(Order).where(Order.user_id == user.id).order_by(Order.created_at.desc())
+        select(Order)
+        .where(Order.user_id == user.id)
+        .order_by(Order.created_at.desc())
+        .limit(limit)
     )
     return result.scalars().all()
+
+
+@router.get("/{order_id}", response_model=OrderDetailResponse)
+async def get_order(order_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Get order by ID with full details."""
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@router.get("/{order_id}/track", response_model=OrderTrackingResponse)
+async def track_order(order_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Get live tracking info for an order — rider location, ETA, Google Maps link."""
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Determine which rider to track (pickup or delivery based on status)
+    rider = None
+    rider_id = None
+    if order.status in ("PICKUP_RIDER_ASSIGNED", "PICKUP_EN_ROUTE"):
+        rider_id = order.pickup_rider_id
+    elif order.status in ("DELIVERY_RIDER_ASSIGNED", "OUT_FOR_DELIVERY"):
+        rider_id = order.delivery_rider_id
+
+    if rider_id:
+        rider_result = await db.execute(select(Rider).where(Rider.id == rider_id))
+        rider = rider_result.scalar_one_or_none()
+
+    # Build Google Maps navigation URL (rider → drop-off)
+    google_maps_url = None
+    estimated_arrival_min = None
+
+    if rider and rider.current_lat and rider.current_lng and order.drop_lat and order.drop_lng:
+        google_maps_url = (
+            f"https://www.google.com/maps/dir/"
+            f"{float(rider.current_lat)},{float(rider.current_lng)}/"
+            f"{float(order.drop_lat)},{float(order.drop_lng)}"
+        )
+        # Rough ETA: use distance_km / average speed (~20 km/h in city)
+        try:
+            from services.maps import get_distance
+            dist = await get_distance(
+                float(rider.current_lat), float(rider.current_lng),
+                float(order.drop_lat), float(order.drop_lng),
+            )
+            estimated_arrival_min = dist.get("duration_min")
+        except Exception:
+            # Fallback rough estimate
+            import math
+            lat_diff = float(order.drop_lat) - float(rider.current_lat)
+            lng_diff = float(order.drop_lng) - float(rider.current_lng)
+            approx_km = math.sqrt(lat_diff**2 + lng_diff**2) * 111  # crude lat/lng to km
+            estimated_arrival_min = max(int(approx_km * 3), 5)  # ~20 km/h
+
+    return OrderTrackingResponse(
+        order_id=order.id,
+        order_number=order.order_number,
+        status=order.status,
+        drop_address=order.drop_address,
+        drop_lat=float(order.drop_lat) if order.drop_lat else None,
+        drop_lng=float(order.drop_lng) if order.drop_lng else None,
+        rider_name=rider.full_name if rider else None,
+        rider_phone=rider.phone if rider else None,
+        rider_lat=float(rider.current_lat) if rider and rider.current_lat else None,
+        rider_lng=float(rider.current_lng) if rider and rider.current_lng else None,
+        rider_vehicle=rider.vehicle if rider else None,
+        estimated_arrival_min=estimated_arrival_min,
+        google_maps_url=google_maps_url,
+        last_location_update=rider.last_location_update if rider else None,
+    )

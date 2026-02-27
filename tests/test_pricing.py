@@ -7,14 +7,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 from services.pricing import (
     calculate_price, determine_vehicle, calculate_surge,
     MINIMUM_CHARGE, VEHICLE_MULTIPLIER, SUBSCRIPTION_PLANS,
+    RATE_PER_KM,
 )
 
 
 def test_determine_vehicle():
-    """Weight tier should map to correct vehicle."""
-    assert determine_vehicle("LIGHT") == "BIKE"
-    assert determine_vehicle("MEDIUM") == "AUTO"
-    assert determine_vehicle("HEAVY") == "VAN"
+    """Package size should map to correct vehicle."""
+    assert determine_vehicle("SMALL") == "BIKE"
+    assert determine_vehicle("MEDIUM") == "BIKE"
+    assert determine_vehicle("LARGE") == "MINI_VAN"
+    assert determine_vehicle("BULKY") == "MINI_TRUCK"
     assert determine_vehicle("UNKNOWN") == "BIKE"  # default
 
 
@@ -24,47 +26,63 @@ def test_minimum_charge():
     assert price.total_cost >= MINIMUM_CHARGE
 
 
-def test_base_cost_calculation():
-    """Base cost = distance × rate × vehicle_mult × time_factor."""
+def test_base_cost_small():
+    """Small package base cost = distance × rate × BIKE mult × time."""
     price = calculate_price(
         distance_km=10.0, duration_min=20,
-        weight_tier="LIGHT", time_factor_key="STANDARD",
+        weight_tier="SMALL", time_factor_key="STANDARD",
     )
-    # 10 km × ₹10/km × 1.0 (bike) × 1.0 (standard) = ₹100
-    assert price.base_cost == 100.0
+    # 10 km × $2.50/km × 1.0 (bike) × 1.0 (standard) = $25.00
+    expected = 10.0 * RATE_PER_KM * 1.0 * 1.0
+    assert price.base_cost == expected
     assert price.vehicle_type == "BIKE"
-    assert price.total_cost == 100.0
+    assert price.total_cost == expected
 
 
-def test_heavy_vehicle_multiplier():
-    """Heavy packages should use VAN multiplier."""
+def test_large_mini_van_multiplier():
+    """Large packages should use MINI_VAN multiplier."""
     price = calculate_price(
         distance_km=10.0, duration_min=20,
-        weight_tier="HEAVY", time_factor_key="STANDARD",
+        weight_tier="LARGE", time_factor_key="STANDARD",
     )
-    # 10 × 10 × 1.6 (VAN) × 1.0 = ₹160
-    assert price.base_cost == 160.0
-    assert price.vehicle_type == "VAN"
+    # 10 × $2.50 × 1.3 (MINI_VAN) × 1.0 = $32.50
+    expected = 10.0 * RATE_PER_KM * VEHICLE_MULTIPLIER["MINI_VAN"]
+    assert price.base_cost == expected
+    assert price.vehicle_type == "MINI_VAN"
+
+
+def test_bulky_mini_truck_multiplier():
+    """Bulky packages should use MINI_TRUCK multiplier."""
+    price = calculate_price(
+        distance_km=10.0, duration_min=20,
+        weight_tier="BULKY", time_factor_key="STANDARD",
+    )
+    # 10 × $2.50 × 1.5 (MINI_TRUCK) × 1.0 = $37.50
+    expected = 10.0 * RATE_PER_KM * VEHICLE_MULTIPLIER["MINI_TRUCK"]
+    assert price.base_cost == expected
+    assert price.vehicle_type == "MINI_TRUCK"
 
 
 def test_express_time_factor():
     """Express should apply 1.8x time factor."""
     price = calculate_price(
         distance_km=10.0, duration_min=20,
-        weight_tier="LIGHT", time_factor_key="EXPRESS",
+        weight_tier="SMALL", time_factor_key="EXPRESS",
     )
-    # 10 × 10 × 1.0 × 1.8 = ₹180
-    assert price.base_cost == 180.0
+    # 10 × $2.50 × 1.0 × 1.8 = $45.00
+    expected = 10.0 * RATE_PER_KM * 1.0 * 1.8
+    assert price.base_cost == expected
 
 
 def test_next_day_discount():
     """Next-day should apply 0.9x discount."""
     price = calculate_price(
         distance_km=10.0, duration_min=20,
-        weight_tier="LIGHT", time_factor_key="NEXT_DAY",
+        weight_tier="SMALL", time_factor_key="NEXT_DAY",
     )
-    # 10 × 10 × 1.0 × 0.9 = ₹90
-    assert price.base_cost == 90.0
+    # 10 × $2.50 × 1.0 × 0.9 = $22.50
+    expected = 10.0 * RATE_PER_KM * 1.0 * 0.9
+    assert price.base_cost == expected
 
 
 def test_surge_applied():
@@ -74,8 +92,9 @@ def test_surge_applied():
         surge_multiplier=1.4,
         surge_reason="High demand",
     )
-    # Base: ₹100, Surged: ₹140
-    assert price.total_cost == 140.0
+    base = 10.0 * RATE_PER_KM  # $25.00
+    surged = base * 1.4          # $35.00
+    assert price.total_cost == round(surged, 2)
     assert price.surge_reason == "High demand"
     assert price.rider_surge_bonus > 0  # 30% of surge premium
 
@@ -86,9 +105,10 @@ def test_batch_discount():
         distance_km=10.0, duration_min=20,
         is_batch_eligible=True,
     )
-    # Base: ₹100, Batch: -₹15 → Total: ₹85
-    assert price.batch_discount == 15.0
-    assert price.total_cost == 85.0
+    base = 10.0 * RATE_PER_KM                    # $25.00
+    batch = base * 0.15                            # $3.75
+    assert price.batch_discount == round(batch, 2)
+    assert price.total_cost == round(base - batch, 2)
 
 
 def test_surge_with_batch():
@@ -98,9 +118,11 @@ def test_surge_with_batch():
         surge_multiplier=1.2,
         is_batch_eligible=True,
     )
-    # Base: ₹100, Surged: ₹120, Batch: -₹18 → Total: ₹102
-    assert price.batch_discount == 18.0
-    assert price.total_cost == 102.0
+    base = 10.0 * RATE_PER_KM      # $25.00
+    surged = base * 1.2              # $30.00
+    batch = surged * 0.15            # $4.50
+    assert price.batch_discount == round(batch, 2)
+    assert price.total_cost == round(surged - batch, 2)
 
 
 def test_free_subscription_delivery():
@@ -121,9 +143,10 @@ def test_subscription_percentage_discount():
         subscription_plan="BUSINESS",
         free_deliveries_remaining=0,
     )
-    # Base: ₹100, Discount: 5% → ₹95
-    assert price.subscription_discount == 5.0
-    assert price.total_cost == 95.0
+    base = 10.0 * RATE_PER_KM              # $25.00
+    discount = base * 0.05                   # $1.25
+    assert price.subscription_discount == round(discount, 2)
+    assert price.total_cost == round(base - discount, 2)
 
 
 def test_calculate_surge_no_surge():
@@ -152,6 +175,23 @@ def test_addons_cost():
         distance_km=10.0, duration_min=20,
         addons=["PRIORITY_HANDLING", "PHOTO_PROOF"],
     )
-    # Base: ₹100 + ₹30 + ₹10 = ₹140
-    assert price.addons_cost == 40.0
-    assert price.total_cost == 140.0
+    base = 10.0 * RATE_PER_KM                              # $25.00
+    addons = 7.99 + 2.99                                     # $10.98
+    assert price.addons_cost == addons
+    assert price.total_cost == round(base + addons, 2)
+
+
+def test_medium_uses_bike():
+    """Medium packages should still use BIKE (not mini_van)."""
+    price = calculate_price(
+        distance_km=10.0, duration_min=20,
+        weight_tier="MEDIUM", time_factor_key="STANDARD",
+    )
+    assert price.vehicle_type == "BIKE"
+    assert price.base_cost == 10.0 * RATE_PER_KM
+
+
+def test_truck_multiplier_exists():
+    """TRUCK multiplier should be defined and > MINI_TRUCK."""
+    assert "TRUCK" in VEHICLE_MULTIPLIER
+    assert VEHICLE_MULTIPLIER["TRUCK"] > VEHICLE_MULTIPLIER["MINI_TRUCK"]

@@ -11,14 +11,16 @@ from pydantic import BaseModel, Field
 
 class VehicleType(str, Enum):
     BIKE = "BIKE"
-    AUTO = "AUTO"
-    VAN = "VAN"
+    MINI_VAN = "MINI_VAN"
+    MINI_TRUCK = "MINI_TRUCK"
+    TRUCK = "TRUCK"
 
 
-class WeightTier(str, Enum):
-    LIGHT = "LIGHT"
+class PackageSize(str, Enum):
+    SMALL = "SMALL"
     MEDIUM = "MEDIUM"
-    HEAVY = "HEAVY"
+    LARGE = "LARGE"
+    BULKY = "BULKY"
 
 
 class OrderStatus(str, Enum):
@@ -64,6 +66,12 @@ class UserCreate(BaseModel):
     telegram_id: int
     full_name: str
     phone: str | None = None
+    telegram_username: str | None = None
+
+
+class UserUpdate(BaseModel):
+    phone: str | None = None
+    full_name: str | None = None
     telegram_username: str | None = None
 
 
@@ -129,13 +137,20 @@ class OrderCreate(BaseModel):
     telegram_id: int
     pickup_address: str
     drop_address: str
-    weight_tier: WeightTier = WeightTier.LIGHT
-    weight_kg: float | None = None
+    package_size: PackageSize = PackageSize.SMALL
     description: str | None = None
     is_express: bool = False
     is_batch_eligible: bool = True
     payment_mode: PaymentMode = PaymentMode.COD
     idempotency_key: uuid.UUID | None = None
+
+    # Backward compat: accept weight_tier as alias for package_size
+    weight_tier: PackageSize | None = None
+
+    # Recipient contact (optional but recommended)
+    drop_contact_name: str | None = None
+    drop_contact_phone: str | None = None
+    drop_contact_telegram_id: int | None = None
 
 
 class PriceEstimate(BaseModel):
@@ -158,7 +173,10 @@ class OrderResponse(BaseModel):
     status: str
     pickup_address: str
     drop_address: str
-    weight: str
+    drop_contact_name: str | None = None
+    drop_contact_phone: str | None = None
+    drop_contact_telegram_id: int | None = None
+    package_size: str
     vehicle: str
     distance_km: float | None
     duration_min: int | None
@@ -178,6 +196,53 @@ class OrderStatusUpdate(BaseModel):
     actor_type: str = "SYSTEM"
     actor_id: uuid.UUID | None = None
     metadata: dict | None = None
+
+
+class OrderDetailResponse(BaseModel):
+    """Detailed order info for individual order view."""
+    id: uuid.UUID
+    order_number: str
+    status: str
+    pickup_address: str
+    drop_address: str
+    drop_contact_name: str | None = None
+    drop_contact_phone: str | None = None
+    drop_contact_telegram_id: int | None = None
+    package_size: str
+    vehicle: str
+    distance_km: float | None
+    duration_min: int | None
+    base_cost: float | None
+    surge_multiplier: float
+    total_cost: float
+    is_express: bool
+    is_batch_eligible: bool
+    payment: str
+    payment_mode: str | None = None
+    created_at: datetime
+    delivered_at: datetime | None
+    cancelled_at: datetime | None
+
+    class Config:
+        from_attributes = True
+
+
+class OrderTrackingResponse(BaseModel):
+    """Live tracking info for an order."""
+    order_id: uuid.UUID
+    order_number: str
+    status: str
+    drop_address: str
+    drop_lat: float | None
+    drop_lng: float | None
+    rider_name: str | None
+    rider_phone: str | None
+    rider_lat: float | None
+    rider_lng: float | None
+    rider_vehicle: str | None
+    estimated_arrival_min: int | None
+    google_maps_url: str | None
+    last_location_update: datetime | None
 
 
 # ── Warehouse Schemas ──────────────────────────────────────

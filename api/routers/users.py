@@ -7,9 +7,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
 from models.user import User
-from schemas import UserCreate, UserResponse
+from schemas import UserCreate, UserUpdate, UserResponse
 
 router = APIRouter()
+
+
+@router.patch("/{telegram_id}", response_model=UserResponse)
+async def update_user(telegram_id: int, data: UserUpdate, db: AsyncSession = Depends(get_db)):
+    """Update an existing user."""
+    result = await db.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if data.phone is not None:
+        user.phone = data.phone
+    if data.full_name is not None:
+        user.full_name = data.full_name
+    if data.telegram_username is not None:
+        user.telegram_username = data.telegram_username
+        
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 @router.post("/", response_model=UserResponse)

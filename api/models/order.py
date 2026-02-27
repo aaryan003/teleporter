@@ -6,6 +6,7 @@ from sqlalchemy import (
     String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text,
     Enum as PgEnum,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.database import Base
 
@@ -40,14 +41,18 @@ class Order(Base):
     drop_otp_hash: Mapped[str | None] = mapped_column(String(128))
     drop_otp_attempts: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Recipient contact (for OTP forwarding)
+    drop_contact_name: Mapped[str | None] = mapped_column(String(255))
+    drop_contact_phone: Mapped[str | None] = mapped_column(String(20))
+    drop_contact_telegram_id: Mapped[int | None] = mapped_column(Integer)
+
     # Package info
-    weight_kg: Mapped[float | None] = mapped_column(Numeric(5, 2))
-    weight: Mapped[str] = mapped_column(
-        PgEnum("LIGHT", "MEDIUM", "HEAVY", name="weight_tier", create_type=False),
-        default="LIGHT",
+    package_size: Mapped[str] = mapped_column(
+        PgEnum("SMALL", "MEDIUM", "LARGE", "BULKY", name="package_size", create_type=False),
+        default="SMALL",
     )
     vehicle: Mapped[str] = mapped_column(
-        PgEnum("BIKE", "AUTO", "VAN", name="vehicle_type", create_type=False),
+        PgEnum("BIKE", "MINI_VAN", "MINI_TRUCK", "TRUCK", name="vehicle_type", create_type=False),
         default="BIKE",
     )
     description: Mapped[str | None] = mapped_column(Text)
@@ -136,7 +141,7 @@ class OrderEvent(Base):
     )
     actor_type: Mapped[str] = mapped_column(String(20), nullable=False)  # USER, RIDER, SYSTEM, N8N
     actor_id: Mapped[uuid.UUID | None] = mapped_column()
-    metadata_json: Mapped[dict | None] = mapped_column("metadata", type_=type(None))
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     # Relationships

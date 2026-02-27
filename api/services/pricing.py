@@ -3,7 +3,7 @@ Pricing Engine — Revenue model for TeleporterBot v2.
 
 Revenue streams:
   1. Base pricing: distance × rate × vehicle_multiplier × time_factor
-  2. Subscriptions: Starter (₹99), Business (₹499), Enterprise (₹1,999)
+  2. Subscriptions: Starter ($9.99), Business ($49.99), Enterprise ($199.99)
   3. Smart batching discount: 15% off for flexible timing
   4. Surge pricing: demand/supply ratio per zone
   5. Value-added upsells: priority, insurance, photo proof, etc.
@@ -15,13 +15,14 @@ from enum import Enum
 
 # ── Constants ──────────────────────────────────────────────
 
-RATE_PER_KM = 10.0        # ₹10 per km (base)
-MINIMUM_CHARGE = 35.0     # ₹35 floor price
+RATE_PER_KM = 2.50         # $2.50 per km (base)
+MINIMUM_CHARGE = 8.99      # $8.99 floor price
 
 VEHICLE_MULTIPLIER = {
     "BIKE": 1.0,
-    "AUTO": 1.3,
-    "VAN": 1.6,
+    "MINI_VAN": 1.3,
+    "MINI_TRUCK": 1.5,
+    "TRUCK": 1.8,
 }
 
 TIME_FACTOR = {
@@ -31,28 +32,32 @@ TIME_FACTOR = {
     "EXPRESS": 1.8,        # 2-hour express
 }
 
-WEIGHT_TO_VEHICLE = {
-    "LIGHT": "BIKE",       # <5 kg
-    "MEDIUM": "AUTO",      # 5-20 kg
-    "HEAVY": "VAN",        # >20 kg
+SIZE_TO_VEHICLE = {
+    "SMALL": "BIKE",         # Fits in a bag — documents, phone, small box
+    "MEDIUM": "BIKE",        # Backpack/carton — shoes, books, small electronics
+    "LARGE": "MINI_VAN",     # Suitcase size — TV box, thermocol, small furniture
+    "BULKY": "MINI_TRUCK",   # Won't fit in minivan — mattress, large appliances
 }
+
+# Keep backward compat alias
+WEIGHT_TO_VEHICLE = SIZE_TO_VEHICLE
 
 BATCH_DISCOUNT_PCT = 0.15  # 15% off for batch-eligible orders
 
 # Subscription plans
 SUBSCRIPTION_PLANS = {
     "STARTER": {
-        "monthly_price": 99.0,
+        "monthly_price": 9.99,
         "free_deliveries": 5,
         "discount_pct": 0.0,
     },
     "BUSINESS": {
-        "monthly_price": 499.0,
+        "monthly_price": 49.99,
         "free_deliveries": 25,
         "discount_pct": 0.05,  # 5% on top
     },
     "ENTERPRISE": {
-        "monthly_price": 1999.0,
+        "monthly_price": 199.99,
         "free_deliveries": 999,  # effectively unlimited
         "discount_pct": 0.10,    # 10% on top
     },
@@ -60,12 +65,12 @@ SUBSCRIPTION_PLANS = {
 
 # Value-added service prices
 ADDON_PRICES = {
-    "PRIORITY_HANDLING": 30.0,
-    "PHOTO_PROOF": 10.0,
-    "INSURANCE_5K": 25.0,
-    "INSURANCE_25K": 75.0,
-    "SCHEDULED_SLOT": 20.0,
-    "RETURN_SERVICE": 15.0,
+    "PRIORITY_HANDLING": 7.99,
+    "PHOTO_PROOF": 2.99,
+    "INSURANCE_500": 4.99,
+    "INSURANCE_2500": 14.99,
+    "SCHEDULED_SLOT": 4.99,
+    "RETURN_SERVICE": 3.99,
 }
 
 # Surge thresholds (orders-to-riders ratio)
@@ -76,7 +81,7 @@ SURGE_BANDS = [
     (999, 1.6),   # ratio ≥ 6 → 1.6x (cap)
 ]
 
-RIDER_SURGE_SHARE = 0.30  # 30% of surge premium goes to rider
+RIDER_SURGE_SHARE = 0.30  # 30% of surge premium goes to driver
 
 
 # ── Data classes ───────────────────────────────────────────
@@ -102,9 +107,9 @@ class PriceBreakdown:
 
 # ── Core Functions ─────────────────────────────────────────
 
-def determine_vehicle(weight_tier: str) -> str:
-    """Map weight tier to vehicle type."""
-    return WEIGHT_TO_VEHICLE.get(weight_tier, "BIKE")
+def determine_vehicle(package_size: str) -> str:
+    """Map package size to vehicle type."""
+    return SIZE_TO_VEHICLE.get(package_size, "BIKE")
 
 
 def calculate_surge(active_orders: int, available_riders: int) -> tuple[float, str | None]:
@@ -113,7 +118,7 @@ def calculate_surge(active_orders: int, available_riders: int) -> tuple[float, s
     Returns (multiplier, reason_string).
     """
     if available_riders <= 0:
-        return 1.6, f"No riders available ({active_orders} active orders)"
+        return 1.6, f"No drivers available ({active_orders} active orders)"
 
     ratio = active_orders / available_riders
 
@@ -122,18 +127,18 @@ def calculate_surge(active_orders: int, available_riders: int) -> tuple[float, s
             if multiplier > 1.0:
                 reason = (
                     f"High demand: {active_orders} orders, "
-                    f"{available_riders} riders (ratio: {ratio:.1f})"
+                    f"{available_riders} drivers (ratio: {ratio:.1f})"
                 )
                 return multiplier, reason
             return 1.0, None
 
-    return 1.6, f"Extreme demand: {active_orders} orders, {available_riders} riders"
+    return 1.6, f"Extreme demand: {active_orders} orders, {available_riders} drivers"
 
 
 def calculate_price(
     distance_km: float,
     duration_min: int,
-    weight_tier: str = "LIGHT",
+    weight_tier: str = "SMALL",
     time_factor_key: str = "STANDARD",
     surge_multiplier: float = 1.0,
     surge_reason: str | None = None,
@@ -148,7 +153,7 @@ def calculate_price(
     Args:
         distance_km: Distance from pickup to drop-off
         duration_min: Estimated duration in minutes
-        weight_tier: LIGHT, MEDIUM, or HEAVY
+        weight_tier: SMALL, MEDIUM, LARGE, or BULKY (also accepts legacy LIGHT/HEAVY)
         time_factor_key: NEXT_DAY, STANDARD, SAME_DAY, or EXPRESS
         surge_multiplier: Pre-calculated surge factor
         surge_reason: Human-readable surge explanation
@@ -170,7 +175,7 @@ def calculate_price(
     # Apply surge
     surged_cost = base_cost * surge_multiplier
 
-    # Rider surge bonus (for company payroll)
+    # Driver surge bonus (for company payroll)
     rider_surge_bonus = 0.0
     if surge_multiplier > 1.0:
         surge_premium = surged_cost - base_cost

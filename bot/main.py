@@ -8,11 +8,14 @@ Single bot codebase handling:
 
 import asyncio
 import logging
+from typing import Any, Awaitable, Callable
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import Update
 
 from config import settings
 from handlers.user import router as user_router
@@ -21,6 +24,20 @@ from handlers.rider import router as rider_router
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+async def ignore_message_not_modified_middleware(
+    handler: Callable[[Update, dict[str, Any]], Awaitable[Any]],
+    event: Update,
+    data: dict[str, Any],
+) -> Any:
+    """Global middleware: silently drop 'message is not modified' errors."""
+    try:
+        return await handler(event, data)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            return  # swallow silently — harmless double-tap
+        raise
 
 
 async def main():
@@ -39,6 +56,9 @@ async def main():
     # Dispatcher
     dp = Dispatcher(storage=storage)
 
+    # Global middleware — swallow harmless Telegram "not modified" errors
+    dp.update.outer_middleware(ignore_message_not_modified_middleware)
+
     # Register routers
     dp.include_router(user_router)
     dp.include_router(rider_router)
@@ -50,3 +70,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

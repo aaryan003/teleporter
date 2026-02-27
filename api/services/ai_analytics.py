@@ -207,8 +207,8 @@ def _generate_rule_based_insights(kpis: dict) -> list[dict]:
                 "severity": "INFO",
                 "title": "Revenue trending above average today",
                 "insight": (
-                    f"Today's revenue (₹{daily:.0f}) is {((daily/avg_daily - 1)*100):.0f}% "
-                    f"above the weekly average (₹{avg_daily:.0f}/day)."
+                    f"Today's revenue (${daily:.0f}) is {((daily/avg_daily - 1)*100):.0f}% "
+                    f"above the weekly average (${avg_daily:.0f}/day)."
                 ),
             })
 

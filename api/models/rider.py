@@ -15,7 +15,7 @@ class Rider(Base):
     employee_id: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
-    vehicle: Mapped[str] = mapped_column(PgEnum("BIKE", "AUTO", "VAN", name="vehicle_type", create_type=False), default="BIKE")
+    vehicle: Mapped[str] = mapped_column(PgEnum("BIKE", "MINI_VAN", "MINI_TRUCK", "TRUCK", name="vehicle_type", create_type=False), default="BIKE")
     vehicle_reg: Mapped[str | None] = mapped_column(String(30))
     warehouse_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("warehouses.id"))
     current_lat: Mapped[float | None] = mapped_column(Numeric(10, 7))
