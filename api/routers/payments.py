@@ -7,20 +7,34 @@ Payment modes:
   UPI  → Simulated: DB entry recorded, status moves forward immediately
 """
 
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, and_
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
 from models.order import Order, OrderEvent
 from models.rider import Rider
+from models.warehouse import Warehouse
 from services.otp import generate_otp
 from services.notifications import notify_user_order_status, notify_rider_task
-from services.maps import get_distance
+from services.maps import get_distance, geocode
 
 router = APIRouter()
+
+
+def _rider_location(rider: Rider) -> tuple[float, float] | None:
+    """Get rider's location: GPS if set, else warehouse location."""
+    if rider.current_lat is not None and rider.current_lng is not None:
+        return (float(rider.current_lat), float(rider.current_lng))
+    if rider.warehouse_id and rider.warehouse:
+        return (float(rider.warehouse.lat), float(rider.warehouse.lng))
+    return None
 
 
 async def _assign_nearest_pickup_rider(
@@ -28,42 +42,66 @@ async def _assign_nearest_pickup_rider(
     db: AsyncSession,
 ):
     """
-    Assign the nearest ON_DUTY rider to the order's pickup location
-    using Google Distance Matrix (via services.maps.get_distance).
+    Assign the nearest ON_DUTY rider to the order's pickup location.
+    Uses rider GPS if available, else warehouse location.
     """
-    if not order.pickup_lat or not order.pickup_lng:
-        return None
+    logger.info("Rider assignment: order %s pickup_lat=%s pickup_lng=%s", order.order_number, order.pickup_lat, order.pickup_lng)
+    pickup_lat = order.pickup_lat
+    pickup_lng = order.pickup_lng
+    if not pickup_lat or not pickup_lng:
+        # Geocode pickup address if coords missing
+        if order.pickup_address:
+            geo = await geocode(order.pickup_address)
+            if geo:
+                pickup_lat, pickup_lng = geo["lat"], geo["lng"]
+                order.pickup_lat = pickup_lat
+                order.pickup_lng = pickup_lng
+        if not pickup_lat or not pickup_lng:
+            logger.warning("Rider assignment: no pickup coords for order %s", order.order_number)
+            return None
+
+    pickup_lat = float(pickup_lat)
+    pickup_lng = float(pickup_lng)
 
     riders_result = await db.execute(
-        select(Rider).where(
-            and_(
-                Rider.status == "ON_DUTY",
-                Rider.current_lat.is_not(None),
-                Rider.current_lng.is_not(None),
-            )
-        )
+        select(Rider).where(Rider.status == "ON_DUTY").options(selectinload(Rider.warehouse))
     )
     riders = riders_result.scalars().all()
     if not riders:
+        logger.warning("Rider assignment: no ON_DUTY riders")
         return None
+
+    # Prefer riders with real GPS; only use warehouse-based location if no one has GPS
+    riders_with_gps = [r for r in riders if r.current_lat is not None and r.current_lng is not None]
+    riders_warehouse_only = [r for r in riders if r not in riders_with_gps and _rider_location(r)]
+    eligible = riders_with_gps if riders_with_gps else riders_warehouse_only
+    if not eligible:
+        logger.warning("Rider assignment: no riders with location (GPS or warehouse)")
+        return None
+
+    logger.info(
+        "Rider assignment: %d eligible (%d with GPS) for order %s",
+        len(eligible),
+        len(riders_with_gps),
+        order.order_number,
+    )
 
     best_rider = None
     best_distance_km: float | None = None
     best_duration_min: int | None = None
 
-    pickup_lat = float(order.pickup_lat)
-    pickup_lng = float(order.pickup_lng)
-
-    for rider in riders:
+    for rider in eligible:
+        loc = _rider_location(rider)
+        if not loc:
+            continue
         try:
             dist = await get_distance(
-                float(rider.current_lat),
-                float(rider.current_lng),
+                loc[0], loc[1],
                 pickup_lat,
                 pickup_lng,
             )
         except Exception as e:
-            print(f"⚠️ Distance calc failed for rider {rider.id}: {e}")
+            logger.warning("Distance calc failed for rider %s: %s", rider.id, e)
             continue
 
         d_km = dist.get("distance_km")
@@ -78,6 +116,7 @@ async def _assign_nearest_pickup_rider(
     if not best_rider:
         return None
 
+    logger.info("Assigning rider %s (id=%s) to order %s", best_rider.full_name, best_rider.id, order.order_number)
     old_status = order.status
     order.pickup_rider_id = best_rider.id
     order.status = "PICKUP_RIDER_ASSIGNED"
@@ -109,7 +148,7 @@ async def _assign_nearest_pickup_rider(
             },
         )
     except Exception as e:
-        print(f"⚠️ Failed to notify rider {best_rider.id}: {e}")
+        logger.warning("Failed to notify rider %s: %s", best_rider.id, e)
 
     # Notify user that a rider has been assigned
     try:
@@ -124,7 +163,7 @@ async def _assign_nearest_pickup_rider(
                 extra,
             )
     except Exception as e:
-        print(f"⚠️ Failed to notify user for order {order.id}: {e}")
+        logger.warning("Failed to notify user for order %s: %s", order.id, e)
 
     return {
         "rider_id": str(best_rider.id),
@@ -145,7 +184,9 @@ async def confirm_payment(
     For COD: mark as confirmed immediately (payment collected on delivery).
     For CARD/UPI: simulate the payment, record in DB, and proceed.
     """
-    result = await db.execute(select(Order).where(Order.id == order_id))
+    result = await db.execute(
+        select(Order).where(Order.id == order_id).options(selectinload(Order.user))
+    )
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -216,6 +257,38 @@ async def confirm_payment(
         "drop_otp": drop_otp,
         "pickup_assignment": assignment,
     }
+
+
+@router.post("/assign-rider/{order_id}")
+async def assign_rider_to_order(
+    order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Manually trigger rider assignment for an order that is PAYMENT_CONFIRMED
+    but has no pickup rider. Use when assignment was skipped (e.g. old API).
+    """
+    result = await db.execute(
+        select(Order).where(Order.id == order_id).options(selectinload(Order.user))
+    )
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status != "PAYMENT_CONFIRMED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order status is {order.status}; only PAYMENT_CONFIRMED orders can be assigned a rider.",
+        )
+    if order.pickup_rider_id:
+        return {"status": "already_assigned", "rider_id": str(order.pickup_rider_id)}
+
+    assignment = await _assign_nearest_pickup_rider(order, db)
+    if not assignment:
+        raise HTTPException(
+            status_code=503,
+            detail="No eligible rider could be assigned (need ON_DUTY riders with location).",
+        )
+    return {"status": "assigned", "pickup_assignment": assignment}
 
 
 @router.post("/cod-collected/{order_id}")

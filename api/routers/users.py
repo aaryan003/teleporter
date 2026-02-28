@@ -1,5 +1,6 @@
 """User management API endpoints."""
 
+import logging
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from models.user import User
 from schemas import UserCreate, UserUpdate, UserResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.patch("/{telegram_id}", response_model=UserResponse)
@@ -29,9 +31,10 @@ async def update_user(telegram_id: int, data: UserUpdate, db: AsyncSession = Dep
         user.full_name = data.full_name
     if data.telegram_username is not None:
         user.telegram_username = data.telegram_username
-        
+
     await db.commit()
     await db.refresh(user)
+    logger.info("User updated: telegram_id=%s phone=%s", telegram_id, getattr(user, "phone", None))
     return user
 
 
@@ -55,6 +58,7 @@ async def create_or_get_user(data: UserCreate, db: AsyncSession = Depends(get_db
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    logger.info("User created: telegram_id=%s", data.telegram_id)
     return user
 
 

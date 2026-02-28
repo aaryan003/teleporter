@@ -32,6 +32,16 @@ router = Router()
 API = settings.API_BASE_URL
 
 
+def _looks_like_phone(text: str) -> bool:
+    """Detect if text looks like a phone number instead of an address."""
+    if not text or len(text) > 50:
+        return False
+    cleaned = "".join(c for c in text if c.isdigit() or c in "+- ()")
+    digit_count = sum(1 for c in text if c.isdigit())
+    # If mostly digits and has phone-like length (7–15 digits), treat as phone
+    return digit_count >= 7 and digit_count <= 15 and len(cleaned) >= 10
+
+
 async def safe_edit(callback: CallbackQuery, text: str, **kwargs):
     """Edit message, silently ignoring 'message not modified' errors."""
     try:
@@ -43,8 +53,14 @@ async def safe_edit(callback: CallbackQuery, text: str, **kwargs):
 
 async def _api_call(method: str, endpoint: str, **kwargs) -> dict | list | None:
     """Helper to call FastAPI backend."""
+    result, _ = await _api_call_with_error(method, endpoint, **kwargs)
+    return result
+
+
+async def _api_call_with_error(method: str, endpoint: str, **kwargs) -> tuple[dict | list | None, str | None]:
+    """Call API and return (data, error_msg). Use for estimate to show API errors to user."""
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             if method == "GET":
                 resp = await client.get(f"{API}{endpoint}", params=kwargs.get("params"))
             elif method == "POST":
@@ -52,14 +68,25 @@ async def _api_call(method: str, endpoint: str, **kwargs) -> dict | list | None:
             elif method == "PATCH":
                 resp = await client.patch(f"{API}{endpoint}", json=kwargs.get("json"))
             else:
-                return None
+                return None, "Invalid method"
             if resp.status_code in (200, 201):
-                return resp.json()
-            print(f"⚠️ API error: {resp.status_code} - {resp.text}")
-            return None
+                return resp.json(), None
+            err_msg = resp.text
+            try:
+                j = resp.json()
+                d = j.get("detail", err_msg)
+                err_msg = d if isinstance(d, str) else (d[0].get("msg", str(d)) if isinstance(d, list) and d else str(d))
+            except Exception:
+                pass
+            print(f"⚠️ API error: {resp.status_code} - {err_msg}")
+            return None, err_msg
+    except httpx.ConnectError as e:
+        err = "API unreachable. Is the server running?"
+        print(f"⚠️ {err}: {e}")
+        return None, err
     except Exception as e:
         print(f"⚠️ API call error: {e}")
-        return None
+        return None, str(e)
 
 
 # ── /start ─────────────────────────────────────────────────
@@ -125,13 +152,21 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(UserRegistration.waiting_phone, F.contact | F.text)
 async def process_phone(message: Message, state: FSMContext):
-    """Handle the user sharing their contact."""
-    phone = message.contact.phone_number if message.contact else message.text
-    
-    user = await _api_call("PATCH", f"/api/users/{message.from_user.id}", json={
-        "phone": phone
-    })
-    
+    """Handle the user sharing their contact. PATCH if user exists, else POST create with phone."""
+    phone = message.contact.phone_number if message.contact else (message.text or "").strip()
+    if not phone:
+        await message.answer("⚠️ Please send a valid phone number or share your contact.")
+        return
+
+    user = await _api_call("PATCH", f"/api/users/{message.from_user.id}", json={"phone": phone})
+    if not user:
+        # User may not exist yet (e.g. initial POST failed) — create with phone
+        user = await _api_call("POST", "/api/users/", json={
+            "telegram_id": message.from_user.id,
+            "full_name": message.from_user.full_name or "User",
+            "phone": phone,
+            "telegram_username": message.from_user.username,
+        })
     if user:
         await state.clear()
         await message.answer(
@@ -467,6 +502,13 @@ async def receive_pickup_address(message: Message, state: FSMContext):
         address = f"{message.location.latitude},{message.location.longitude}"
         await state.update_data(pickup_address=address, pickup_type="location")
     else:
+        if _looks_like_phone(message.text or ""):
+            await message.answer(
+                "⚠️ That looks like a phone number, not an address.\n\n"
+                "Please send the <b>pickup address</b> (street, area, city)\n"
+                "or share a 📍 location pin.",
+            )
+            return
         await state.update_data(pickup_address=message.text, pickup_type="text")
 
     await state.set_state(BookingFlow.waiting_drop_address)
@@ -485,6 +527,13 @@ async def receive_drop_address(message: Message, state: FSMContext):
         address = f"{message.location.latitude},{message.location.longitude}"
         await state.update_data(drop_address=address)
     else:
+        if _looks_like_phone(message.text or ""):
+            await message.answer(
+                "⚠️ That looks like a phone number, not an address.\n\n"
+                "Please send the <b>drop-off address</b> (street, area, city)\n"
+                "or share a 📍 location pin.",
+            )
+            return
         await state.update_data(drop_address=message.text)
 
     await state.set_state(BookingFlow.waiting_recipient_name)
@@ -545,7 +594,7 @@ async def receive_package_size(callback: CallbackQuery, state: FSMContext):
 
     # Get price estimate
     data = await state.get_data()
-    estimate = await _api_call("POST", "/api/orders/estimate", json={
+    estimate, err_msg = await _api_call_with_error("POST", "/api/orders/estimate", json={
         "telegram_id": callback.from_user.id,
         "pickup_address": data["pickup_address"],
         "drop_address": data["drop_address"],
@@ -555,9 +604,13 @@ async def receive_package_size(callback: CallbackQuery, state: FSMContext):
     })
 
     if not estimate:
+        tip = (
+            err_msg
+            if err_msg and len(err_msg) < 120
+            else "Use full addresses (street, area, city, pincode) or share a 📍 location pin."
+        )
         await callback.message.edit_text(
-            "❌ Sorry, we couldn't calculate the\n"
-            "price. Please try again.",
+            f"❌ Sorry, we couldn't calculate the price.\n\n<i>{tip}</i>",
             reply_markup=main_menu_keyboard(),
         )
         await state.clear()
@@ -625,8 +678,15 @@ async def handle_payment(callback: CallbackQuery, state: FSMContext):
     await callback.answer(f"Processing {payment_mode} payment...")
     data = await state.get_data()
 
+    # Ensure user exists (create-if-missing so order doesn't fail with "User not registered")
+    await _api_call("POST", "/api/users/", json={
+        "telegram_id": callback.from_user.id,
+        "full_name": callback.from_user.full_name or "User",
+        "telegram_username": callback.from_user.username,
+    })
+
     # Create order via API
-    order = await _api_call("POST", "/api/orders/", json={
+    order, err_msg = await _api_call_with_error("POST", "/api/orders/", json={
         "telegram_id": callback.from_user.id,
         "pickup_address": data["pickup_address"],
         "drop_address": data["drop_address"],
@@ -639,9 +699,15 @@ async def handle_payment(callback: CallbackQuery, state: FSMContext):
     })
 
     if not order:
+        hint = ""
+        if err_msg and "not registered" in (err_msg or "").lower():
+            hint = "\n\n👉 Send /start to register first."
+        elif err_msg and len(str(err_msg)) < 100:
+            hint = f"\n\n{err_msg}"
         await callback.message.edit_text(
             "❌ Failed to create order.\n"
-            "Please try again.",
+            "Please try again."
+            + hint,
             reply_markup=main_menu_keyboard(),
         )
         await state.clear()

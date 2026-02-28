@@ -83,14 +83,36 @@ def estimate_duration(distance_km: float, avg_speed_kmh: float = 25.0) -> int:
 
 # ── Geocoding ──────────────────────────────────────────────
 
+def _parse_lat_lng(text: str) -> tuple[float, float] | None:
+    """Parse 'lat,lng' or 'lat,lng' format (e.g. from Telegram location pin)."""
+    if not text or "," not in text:
+        return None
+    parts = text.strip().split(",", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        lat, lng = float(parts[0].strip()), float(parts[1].strip())
+        if -90 <= lat <= 90 and -180 <= lng <= 180:
+            return (lat, lng)
+    except ValueError:
+        pass
+    return None
+
+
 async def geocode(address: str) -> dict | None:
     """
     Geocode an address to lat/lng. Uses Redis cache first,
-    then Google Maps, then Nominatim (OSM) as free fallback.
+    then Geoapify, then Nominatim (OSM) as free fallback.
+    Handles "lat,lng" format (from location pins) directly.
 
     Returns:
         {"lat": float, "lng": float, "formatted": str} or None
     """
+    # ── Location pin (lat,lng) — return immediately ─────────
+    coords = _parse_lat_lng(address)
+    if coords is not None:
+        return {"lat": coords[0], "lng": coords[1], "formatted": address}
+
     r = await _get_redis()
     cache_key = f"geo:{_address_hash(address)}"
 
@@ -139,17 +161,28 @@ async def geocode(address: str) -> dict | None:
             print(f"⚠️ Geoapify geocode exception: {e}")
 
     # ── Nominatim fallback (free, no key needed) ─────────────
-    # Tries full address first, then progressively strips leading tokens
-    # to handle hyper-local addresses OSM doesn't index (e.g. apartment names)
+    # Tries full address first, then area+city+pincode, then progressively
+    # strips leading tokens for hyper-local addresses OSM doesn't index
     if result is None:
         try:
             http = await _get_http()
-            parts = address.replace(",", " ").split()
-            # Build candidate queries: full → drop 1st token → drop 2nd → etc.
+            parts = [p.strip() for p in address.split(",") if p.strip()]
+            # Build candidates: full, area+city (last 2-3 parts), then token stripping
             candidates = [address]
-            for i in range(1, min(4, len(parts))):
-                shorter = " ".join(parts[i:])
-                if len(shorter) > 5:
+            # Try "Area, City Pincode" — e.g. "Maninagar, Ahmedabad 380058"
+            if len(parts) >= 2:
+                area_city = ", ".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                if len(area_city) > 5:
+                    candidates.append(area_city)
+            if len(parts) >= 3:
+                area_city = ", ".join(parts[-3:])
+                if len(area_city) > 5 and area_city not in candidates:
+                    candidates.append(area_city)
+            # Token stripping: drop leading parts
+            flat_parts = address.replace(",", " ").split()
+            for i in range(1, min(5, len(flat_parts))):
+                shorter = " ".join(flat_parts[i:])
+                if len(shorter) > 8 and shorter not in candidates:
                     candidates.append(shorter)
 
             for q in candidates:

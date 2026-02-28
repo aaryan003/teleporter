@@ -6,8 +6,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://teleporter:teleporter_secret@db:5432/teleporter"
+    # Database — must match POSTGRES_* in docker-compose (use db:5432 when in Docker)
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@db:5432/teleporter"
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"

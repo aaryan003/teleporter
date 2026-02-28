@@ -49,8 +49,18 @@ async def estimate_price(data: OrderCreate, db: AsyncSession = Depends(get_db)):
     pickup_geo = await geocode(data.pickup_address)
     drop_geo = await geocode(data.drop_address)
 
-    if not pickup_geo or not drop_geo:
-        raise HTTPException(status_code=400, detail="Could not geocode one or both addresses")
+    if not pickup_geo:
+        print(f"⚠️ Estimate failed: pickup geocode failed for '{data.pickup_address[:60]}...'")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not find location for pickup address. Try a full address or share a 📍 pin.",
+        )
+    if not drop_geo:
+        print(f"⚠️ Estimate failed: drop geocode failed for '{data.drop_address[:60]}...'")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not find location for drop-off address. Try a full address or share a 📍 pin.",
+        )
 
     # Get distance
     dist = await get_distance(
