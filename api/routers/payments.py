@@ -23,9 +23,12 @@ from models.rider import Rider
 from models.warehouse import Warehouse
 from services.otp import generate_otp
 from services.notifications import notify_user_order_status, notify_rider_task
-from services.maps import get_distance, geocode
+from services.maps import get_distance, geocode, haversine_distance
 
 router = APIRouter()
+
+# Riders within this radius (km) of pickup are "in zone"; if none available, assign nearest from anywhere
+ZONE_RADIUS_KM = 25.0
 
 
 def _rider_location(rider: Rider) -> tuple[float, float] | None:
@@ -86,11 +89,25 @@ async def _assign_nearest_pickup_rider(
         order.order_number,
     )
 
+    # Two-tier: first try riders in zone (within ZONE_RADIUS_KM); if none, fall back to nearest from anywhere
+    in_zone = []
+    for r in eligible:
+        loc = _rider_location(r)
+        if loc:
+            d = haversine_distance(pickup_lat, pickup_lng, loc[0], loc[1])
+            if d <= ZONE_RADIUS_KM:
+                in_zone.append(r)
+    pool = in_zone if in_zone else eligible
+    if in_zone:
+        logger.info("Rider assignment: %d in-zone riders for order %s", len(in_zone), order.order_number)
+    else:
+        logger.info("Rider assignment: no in-zone riders, using nearest from anywhere for order %s", order.order_number)
+
     best_rider = None
     best_distance_km: float | None = None
     best_duration_min: int | None = None
 
-    for rider in eligible:
+    for rider in pool:
         loc = _rider_location(rider)
         if not loc:
             continue
