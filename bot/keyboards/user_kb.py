@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Main menu after /start."""
+    """Main menu keyboard."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📦 Book a Delivery", callback_data="book_delivery")],
         [InlineKeyboardButton(text="📋 My Orders", callback_data="my_orders")],
@@ -32,7 +32,7 @@ def package_size_keyboard() -> InlineKeyboardMarkup:
             text="🚛 Bulky — mattress / appliance",
             callback_data="size_BULKY",
         )],
-        [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")],
     ])
 
 
@@ -44,6 +44,7 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order"),
         ],
         [InlineKeyboardButton(text="🤝 Batch & Save (15% off)", callback_data="toggle_batch")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")],
     ])
 
 
@@ -54,6 +55,7 @@ def payment_method_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💳 Card Payment", callback_data="pay_CARD"),
          InlineKeyboardButton(text="📱 UPI Payment", callback_data="pay_UPI")],
         [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")],
     ])
 
 
@@ -62,6 +64,7 @@ def express_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🐢 Standard (Cheapest)", callback_data="speed_standard")],
         [InlineKeyboardButton(text="⚡ Express (2 hrs, 1.8x)", callback_data="speed_express")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")],
     ])
 
 
@@ -72,7 +75,7 @@ def pickup_slot_keyboard(slots: list[dict]) -> InlineKeyboardMarkup:
         label = f"🕐 {slot['start']} — {slot.get('capacity', '?')} left"
         buttons.append([InlineKeyboardButton(text=label, callback_data=f"slot_{slot['id']}")])
 
-    buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data="back_to_menu")])
+    buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -82,7 +85,7 @@ def subscription_plans_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🎫 Starter — $9.99/mo (5 free)", callback_data="sub_STARTER")],
         [InlineKeyboardButton(text="💼 Business — $49.99/mo (25 free)", callback_data="sub_BUSINESS")],
         [InlineKeyboardButton(text="🏢 Enterprise — $199.99/mo (∞)", callback_data="sub_ENTERPRISE")],
-        [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")],
     ])
 
 
@@ -92,6 +95,7 @@ def order_actions_keyboard(order_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📍 Track Order", callback_data=f"track_{order_id}")],
         [InlineKeyboardButton(text="📋 Full Details", callback_data=f"detail_{order_id}")],
         [InlineKeyboardButton(text="🔙 Back to Orders", callback_data="my_orders")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")],
     ])
 
 
@@ -124,4 +128,5 @@ def tracking_keyboard(order_id: str, google_maps_url: str | None = None) -> Inli
         buttons.append([InlineKeyboardButton(text="🗺️ Open in Google Maps", url=google_maps_url)])
     buttons.append([InlineKeyboardButton(text="🔄 Refresh Location", callback_data=f"track_{order_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Back to Orders", callback_data="my_orders")])
+    buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

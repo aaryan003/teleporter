@@ -16,7 +16,7 @@ Features:
 import httpx
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
@@ -845,5 +845,20 @@ async def cmd_help(message: Message):
         "/track — Track active order\n"
         "/help — This message\n\n"
         "📞 Support: @TeleporterSupport",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+# ── Fallback: show main menu without /start ────────────────
+
+@router.message(StateFilter(None))
+async def fallback_main_menu(message: Message, state: FSMContext):
+    """When not in a flow, any message opens the main menu."""
+    await state.clear()
+    await message.answer(
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📦 <b>TeleporterBot Logistics</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "What would you like to do?",
         reply_markup=main_menu_keyboard(),
     )
