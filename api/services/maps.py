@@ -127,64 +127,67 @@ async def geocode(address: str) -> dict | None:
 
     result = None
 
-    # ── Try Geoapify ────────────────────────────────────────
+    # Build fallback candidates: full address first, then area+city, then progressively simpler
+    # e.g. "12/A Tulsi Villa Bunglow, Maninagar, Ahmedabad" → try full, then "Maninagar, Ahmedabad", etc.
+    def _geocode_candidates(addr: str) -> list[str]:
+        candidates = [addr.strip()]
+        parts = [p.strip() for p in addr.split(",") if p.strip()]
+        # Area + city: "Maninagar, Ahmedabad" or "Maninagar, Ahmedabad 380058"
+        if len(parts) >= 2:
+            area_city = ", ".join(parts[-2:])
+            if len(area_city) > 5 and area_city not in candidates:
+                candidates.append(area_city)
+        if len(parts) >= 3:
+            area_city = ", ".join(parts[-3:])
+            if len(area_city) > 5 and area_city not in candidates:
+                candidates.append(area_city)
+        # Token stripping: drop leading parts (building names/numbers OSM often doesn't index)
+        flat_parts = addr.replace(",", " ").split()
+        for i in range(1, min(6, len(flat_parts))):
+            shorter = " ".join(flat_parts[i:])
+            if len(shorter) > 6 and shorter not in candidates:
+                candidates.append(shorter)
+        # Last resort: just the city
+        if len(parts) >= 1 and parts[-1] not in candidates:
+            candidates.append(parts[-1])
+        return candidates
+
+    candidates = _geocode_candidates(address)
+
+    # ── Try Geoapify (each candidate until one works) ─────────
     if settings.GEOAPIFY_API_KEY:
         try:
             http = await _get_http()
-            resp = await http.get(
-                GEOAPIFY_GEOCODE_URL,
-                params={
-                    "text": address,
-                    "apiKey": settings.GEOAPIFY_API_KEY,
-                },
-            )
-            data = resp.json()
-            features = data.get("features") or []
-            if features:
-                props = features[0].get("properties", {}) or {}
-                lat = props.get("lat")
-                lon = props.get("lon")
-                if lat is not None and lon is not None:
-                    result = {
-                        "lat": float(lat),
-                        "lng": float(lon),
-                        "formatted": props.get("formatted")
-                        or props.get("address_line2")
-                        or address,
-                    }
-            if result is None:
-                print(
-                    f"⚠️ Geoapify geocode failed for '{address}': "
-                    f"no features in response"
+            for q in candidates:
+                resp = await http.get(
+                    GEOAPIFY_GEOCODE_URL,
+                    params={
+                        "text": q,
+                        "apiKey": settings.GEOAPIFY_API_KEY,
+                    },
                 )
+                data = resp.json()
+                features = data.get("features") or []
+                if features:
+                    props = features[0].get("properties", {}) or {}
+                    lat = props.get("lat")
+                    lon = props.get("lon")
+                    if lat is not None and lon is not None:
+                        result = {
+                            "lat": float(lat),
+                            "lng": float(lon),
+                            "formatted": props.get("formatted")
+                            or props.get("address_line2")
+                            or q,
+                        }
+                        break
         except Exception as e:
             print(f"⚠️ Geoapify geocode exception: {e}")
 
     # ── Nominatim fallback (free, no key needed) ─────────────
-    # Tries full address first, then area+city+pincode, then progressively
-    # strips leading tokens for hyper-local addresses OSM doesn't index
     if result is None:
         try:
             http = await _get_http()
-            parts = [p.strip() for p in address.split(",") if p.strip()]
-            # Build candidates: full, area+city (last 2-3 parts), then token stripping
-            candidates = [address]
-            # Try "Area, City Pincode" — e.g. "Maninagar, Ahmedabad 380058"
-            if len(parts) >= 2:
-                area_city = ", ".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-                if len(area_city) > 5:
-                    candidates.append(area_city)
-            if len(parts) >= 3:
-                area_city = ", ".join(parts[-3:])
-                if len(area_city) > 5 and area_city not in candidates:
-                    candidates.append(area_city)
-            # Token stripping: drop leading parts
-            flat_parts = address.replace(",", " ").split()
-            for i in range(1, min(5, len(flat_parts))):
-                shorter = " ".join(flat_parts[i:])
-                if len(shorter) > 8 and shorter not in candidates:
-                    candidates.append(shorter)
-
             for q in candidates:
                 resp = await http.get(NOMINATIM_URL, params={
                     "q": q,
@@ -200,10 +203,7 @@ async def geocode(address: str) -> dict | None:
                         "lng": float(hits[0]["lon"]),
                         "formatted": hits[0].get("display_name", address),
                     }
-                    print(f"✅ Nominatim geocoded '{q}' → {result['lat']:.4f},{result['lng']:.4f}")
                     break
-            else:
-                print(f"⚠️ Nominatim: no results for '{address}' (all variants tried)")
         except Exception as e:
             print(f"⚠️ Nominatim geocode exception: {e}")
 
