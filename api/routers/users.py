@@ -53,7 +53,7 @@ async def create_or_get_user(data: UserCreate, db: AsyncSession = Depends(get_db
         telegram_username=data.telegram_username,
     )
     db.add(user)
-    await db.flush()
+    await db.commit()
     await db.refresh(user)
     return user
 

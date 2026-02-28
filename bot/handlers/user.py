@@ -55,6 +55,7 @@ async def _api_call(method: str, endpoint: str, **kwargs) -> dict | list | None:
                 return None
             if resp.status_code in (200, 201):
                 return resp.json()
+            print(f"⚠️ API error: {resp.status_code} - {resp.text}")
             return None
     except Exception as e:
         print(f"⚠️ API call error: {e}")
@@ -68,25 +69,48 @@ async def cmd_start(message: Message, state: FSMContext):
     """Handle /start — register or welcome back."""
     await state.clear()
 
-    # Register or get user
-    user = await _api_call("POST", "/api/users/", json={
-        "telegram_id": message.from_user.id,
-        "full_name": message.from_user.full_name,
-        "telegram_username": message.from_user.username,
-    })
+    # Check if user exists
+    print(f"🔍 Checking user: {message.from_user.id}")
+    user = await _api_call("GET", f"/api/users/{message.from_user.id}")
+    print(f"📊 User data: {user}")
 
-    if user and user.get("phone"):
-        await message.answer(
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📦 <b>TeleporterBot Logistics</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Hello <b>{message.from_user.first_name}</b>! 👋\n\n"
-            f"Fast, reliable, warehouse-backed\n"
-            f"deliveries at your fingertips.\n\n"
-            f"What would you like to do?",
-            reply_markup=main_menu_keyboard(),
-        )
+    if user:
+        # User exists - check if they have phone
+        if user.get("phone"):
+            # Existing user with phone - show welcome back message
+            await message.answer(
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📦 <b>TeleporterBot Logistics</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Welcome back <b>{message.from_user.first_name}</b>! 👋\n\n"
+                f"Fast, reliable, warehouse-backed\n"
+                f"deliveries at your fingertips.\n\n"
+                f"What would you like to do?",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            # User exists but no phone - ask for phone
+            await state.set_state(UserRegistration.waiting_phone)
+            kb = ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="📱 Share Contact", request_contact=True)]],
+                resize_keyboard=True,
+                one_time_keyboard=True
+            )
+            await message.answer(
+                "👋 Welcome back! Let's complete your profile.\n"
+                "Please share your phone number to continue.",
+                reply_markup=kb
+            )
     else:
+        # New user - create and ask for phone
+        print(f"➕ Creating new user: {message.from_user.id}")
+        user = await _api_call("POST", "/api/users/", json={
+            "telegram_id": message.from_user.id,
+            "full_name": message.from_user.full_name,
+            "telegram_username": message.from_user.username,
+        })
+        print(f"✅ Created user: {user}")
+        
         await state.set_state(UserRegistration.waiting_phone)
         kb = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="📱 Share Contact", request_contact=True)]],
