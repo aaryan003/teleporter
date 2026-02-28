@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
 
-    # Google Maps
-    GOOGLE_MAPS_API_KEY: str = ""
+    # Maps / Geocoding
+    GOOGLE_MAPS_API_KEY: str = ""   # legacy, no longer used
+    GEOAPIFY_API_KEY: str = ""
 
     # Razorpay
     RAZORPAY_KEY_ID: str = ""

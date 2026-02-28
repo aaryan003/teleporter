@@ -70,10 +70,19 @@ async def notify_rider_task(
 ):
     """Send task assignment to rider."""
     if task_type == "PICKUP":
+        order_number = task_details.get("order_number")
+        drop_address = task_details.get("drop_address")
+        total_cost = task_details.get("total_cost")
         message = (
             f"📦 <b>New Pickup Task</b>\n\n"
-            f"📍 Address: {task_details.get('address', 'N/A')}\n"
-            f"📋 Parcels: {task_details.get('count', 1)}\n"
+            f"📋 Order: <code>{order_number or 'N/A'}</code>\n"
+            f"📍 Pickup: {task_details.get('address', 'N/A')}\n"
+        )
+        if drop_address:
+            message += f"🏠 Drop-off: {drop_address}\n"
+        if total_cost is not None:
+            message += f"💰 COD Amount: ${total_cost}\n"
+        message += (
             f"⏰ Slot: {task_details.get('slot', 'ASAP')}\n\n"
             f"🗺️ <a href=\"https://www.google.com/maps/dir/?api=1"
             f"&destination={task_details.get('lat', 0)},{task_details.get('lng', 0)}\">Navigate</a>"

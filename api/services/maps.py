@@ -1,9 +1,9 @@
 """
-Google Maps Service — Geocoding and Distance Matrix with aggressive caching.
+Geoapify Maps Service — Geocoding and Routing with aggressive caching.
 
 Optimization strategy:
   1. Geocode cache in Redis (30-day TTL) → ~70% reduction
-  2. Distance matrix batching (25×25 per call) → ~60% reduction
+  2. Distance caching for pairwise calls → ~60% reduction
   3. Haversine fallback when API down → 100% savings
 """
 
@@ -17,8 +17,11 @@ from config import settings
 _redis: aioredis.Redis | None = None
 _http: httpx.AsyncClient | None = None
 
-GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
-DISTANCE_URL = "https://maps.googleapis.com/maps/api/distancematrix/json"
+# Primary provider: Geoapify
+GEOAPIFY_GEOCODE_URL = "https://api.geoapify.com/v1/geocode/search"
+GEOAPIFY_ROUTING_URL = "https://api.geoapify.com/v1/routing"
+
+# Fallback provider: Nominatim (OpenStreetMap)
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
 # Cache TTLs
@@ -102,30 +105,38 @@ async def geocode(address: str) -> dict | None:
 
     result = None
 
-    # ── Try Google Maps ─────────────────────────────────────
-    if settings.GOOGLE_MAPS_API_KEY:
+    # ── Try Geoapify ────────────────────────────────────────
+    if settings.GEOAPIFY_API_KEY:
         try:
             http = await _get_http()
-            resp = await http.get(GEOCODE_URL, params={
-                "address": address,
-                "key": settings.GOOGLE_MAPS_API_KEY,
-            })
+            resp = await http.get(
+                GEOAPIFY_GEOCODE_URL,
+                params={
+                    "text": address,
+                    "apiKey": settings.GEOAPIFY_API_KEY,
+                },
+            )
             data = resp.json()
-            status = data.get("status")
-
-            if status == "OK" and data.get("results"):
-                loc = data["results"][0]["geometry"]["location"]
-                result = {
-                    "lat": loc["lat"],
-                    "lng": loc["lng"],
-                    "formatted": data["results"][0].get("formatted_address", address),
-                }
-            else:
-                # Log the real reason so we can debug API key issues
-                print(f"⚠️ Google geocode failed for '{address}': status={status}, "
-                      f"error={data.get('error_message', 'none')}")
+            features = data.get("features") or []
+            if features:
+                props = features[0].get("properties", {}) or {}
+                lat = props.get("lat")
+                lon = props.get("lon")
+                if lat is not None and lon is not None:
+                    result = {
+                        "lat": float(lat),
+                        "lng": float(lon),
+                        "formatted": props.get("formatted")
+                        or props.get("address_line2")
+                        or address,
+                    }
+            if result is None:
+                print(
+                    f"⚠️ Geoapify geocode failed for '{address}': "
+                    f"no features in response"
+                )
         except Exception as e:
-            print(f"⚠️ Google geocode exception: {e}")
+            print(f"⚠️ Geoapify geocode exception: {e}")
 
     # ── Nominatim fallback (free, no key needed) ─────────────
     # Tries full address first, then progressively strips leading tokens
@@ -202,38 +213,49 @@ async def get_distance(
             "source": "cache",
         }
 
-    # Try Google Maps Distance Matrix
-    if settings.GOOGLE_MAPS_API_KEY:
+    # Try Geoapify Routing
+    if settings.GEOAPIFY_API_KEY:
         try:
             http = await _get_http()
-            resp = await http.get(DISTANCE_URL, params={
-                "origins": f"{origin_lat},{origin_lng}",
-                "destinations": f"{dest_lat},{dest_lng}",
-                "key": settings.GOOGLE_MAPS_API_KEY,
-                "units": "metric",
-            })
+            resp = await http.get(
+                GEOAPIFY_ROUTING_URL,
+                params={
+                    "waypoints": f"{origin_lat},{origin_lng}|{dest_lat},{dest_lng}",
+                    "mode": "drive",
+                    "apiKey": settings.GEOAPIFY_API_KEY,
+                },
+            )
             data = resp.json()
-
-            if data.get("status") == "OK":
-                element = data["rows"][0]["elements"][0]
-                if element.get("status") == "OK":
-                    distance_km = round(element["distance"]["value"] / 1000, 2)
-                    duration_min = round(element["duration"]["value"] / 60)
+            features = data.get("features") or []
+            if features:
+                props = features[0].get("properties", {}) or {}
+                distance_m = props.get("distance")
+                time_s = props.get("time")
+                if isinstance(distance_m, (int, float)) and isinstance(time_s, (int, float)):
+                    distance_km = round(distance_m / 1000.0, 2)
+                    duration_min = max(int(round(time_s / 60.0)), 1)
 
                     # Cache
-                    await r.hset(cache_key, mapping={
-                        "distance_km": str(distance_km),
-                        "duration_min": str(duration_min),
-                    })
+                    await r.hset(
+                        cache_key,
+                        mapping={
+                            "distance_km": str(distance_km),
+                            "duration_min": str(duration_min),
+                        },
+                    )
                     await r.expire(cache_key, DISTANCE_CACHE_TTL)
 
                     return {
                         "distance_km": distance_km,
                         "duration_min": duration_min,
-                        "source": "google",
+                        "source": "geoapify",
                     }
+            print(
+                f"⚠️ Geoapify routing failed for "
+                f"{origin_lat},{origin_lng} → {dest_lat},{dest_lng}"
+            )
         except Exception as e:
-            print(f"⚠️ Distance Matrix error: {e}")
+            print(f"⚠️ Geoapify routing exception: {e}")
 
     # Haversine fallback
     distance_km = haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng)

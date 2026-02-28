@@ -10,15 +10,127 @@ Payment modes:
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
 from models.order import Order, OrderEvent
+from models.rider import Rider
 from services.otp import generate_otp
-from services.notifications import notify_user_order_status
+from services.notifications import notify_user_order_status, notify_rider_task
+from services.maps import get_distance
 
 router = APIRouter()
+
+
+async def _assign_nearest_pickup_rider(
+    order: Order,
+    db: AsyncSession,
+):
+    """
+    Assign the nearest ON_DUTY rider to the order's pickup location
+    using Google Distance Matrix (via services.maps.get_distance).
+    """
+    if not order.pickup_lat or not order.pickup_lng:
+        return None
+
+    riders_result = await db.execute(
+        select(Rider).where(
+            and_(
+                Rider.status == "ON_DUTY",
+                Rider.current_lat.is_not(None),
+                Rider.current_lng.is_not(None),
+            )
+        )
+    )
+    riders = riders_result.scalars().all()
+    if not riders:
+        return None
+
+    best_rider = None
+    best_distance_km: float | None = None
+    best_duration_min: int | None = None
+
+    pickup_lat = float(order.pickup_lat)
+    pickup_lng = float(order.pickup_lng)
+
+    for rider in riders:
+        try:
+            dist = await get_distance(
+                float(rider.current_lat),
+                float(rider.current_lng),
+                pickup_lat,
+                pickup_lng,
+            )
+        except Exception as e:
+            print(f"⚠️ Distance calc failed for rider {rider.id}: {e}")
+            continue
+
+        d_km = dist.get("distance_km")
+        if d_km is None:
+            continue
+
+        if best_distance_km is None or d_km < best_distance_km:
+            best_distance_km = d_km
+            best_duration_min = dist.get("duration_min")
+            best_rider = rider
+
+    if not best_rider:
+        return None
+
+    old_status = order.status
+    order.pickup_rider_id = best_rider.id
+    order.status = "PICKUP_RIDER_ASSIGNED"
+
+    best_rider.status = "ON_PICKUP"
+    best_rider.current_load = (best_rider.current_load or 0) + 1
+
+    event = OrderEvent(
+        order_id=order.id,
+        from_status=old_status,
+        to_status="PICKUP_RIDER_ASSIGNED",
+        actor_type="SYSTEM",
+    )
+    db.add(event)
+
+    # Notify rider with parcel and delivery details
+    try:
+        await notify_rider_task(
+            best_rider.telegram_id,
+            "PICKUP",
+            {
+                "order_number": order.order_number,
+                "address": order.pickup_address,
+                "drop_address": order.drop_address,
+                "total_cost": float(order.total_cost),
+                "slot": "ASAP",
+                "lat": pickup_lat,
+                "lng": pickup_lng,
+            },
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to notify rider {best_rider.id}: {e}")
+
+    # Notify user that a rider has been assigned
+    try:
+        if order.user:
+            extra = f"Rider: {best_rider.full_name} ({best_rider.vehicle})"
+            if best_duration_min is not None:
+                extra += f"\nETA: ~{best_duration_min} min"
+            await notify_user_order_status(
+                order.user.telegram_id,
+                order.order_number,
+                "PICKUP_RIDER_ASSIGNED",
+                extra,
+            )
+    except Exception as e:
+        print(f"⚠️ Failed to notify user for order {order.id}: {e}")
+
+    return {
+        "rider_id": str(best_rider.id),
+        "distance_km": best_distance_km,
+        "eta_min": best_duration_min,
+    }
 
 
 @router.post("/confirm/{order_id}")
@@ -75,7 +187,7 @@ async def confirm_payment(
     )
     db.add(event)
 
-    # Notify user
+    # Notify user (payment confirmation)
     try:
         if order.user:
             mode_labels = {"COD": "💵 Cash on Delivery", "CARD": "💳 Card (simulated)", "UPI": "📱 UPI (simulated)"}
@@ -91,6 +203,9 @@ async def confirm_payment(
     except Exception as e:
         print(f"⚠️ Notification error: {e}")
 
+    # Assign nearest pickup rider based on current GPS and Google distance
+    assignment = await _assign_nearest_pickup_rider(order, db)
+
     return {
         "status": "confirmed",
         "order_id": str(order_id),
@@ -99,6 +214,7 @@ async def confirm_payment(
         "payment_status": order.payment,
         "pickup_otp": pickup_otp,
         "drop_otp": drop_otp,
+        "pickup_assignment": assignment,
     }
 
 
