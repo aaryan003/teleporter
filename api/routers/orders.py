@@ -186,7 +186,7 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
     )
     db.add(event)
 
-    await db.flush()
+    await db.commit()
     await db.refresh(order)
     return order
 
@@ -236,6 +236,7 @@ async def update_order_status(
     )
     db.add(event)
 
+    await db.commit()
     return {"order_id": str(order_id), "old_status": old_status, "new_status": data.status.value}
 
 
@@ -280,6 +281,7 @@ async def verify_order_otp(data: OTPVerifyRequest, db: AsyncSession = Depends(ge
                 actor_id=data.rider_id,
             )
             db.add(event)
+            await db.commit()
 
     return result
 

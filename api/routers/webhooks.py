@@ -66,6 +66,8 @@ async def warehouse_intake(
             db.add(event)
             updated.append(str(order.id))
 
+    await db.commit()
+
     # Check batch threshold
     at_warehouse_count = (await db.execute(
         select(Order).where(
@@ -206,6 +208,8 @@ async def optimize_routes(
             "distance_km": optimized.total_distance_km,
             "savings_km": optimized.savings_vs_naive_km,
         })
+
+    await db.commit()
 
     return {
         "routes_created": len(routes_created),

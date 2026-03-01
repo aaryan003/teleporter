@@ -37,7 +37,7 @@ async def create_rider(data: RiderCreate, db: AsyncSession = Depends(get_db)):
         max_capacity=data.max_capacity,
     )
     db.add(rider)
-    await db.flush()
+    await db.commit()
     await db.refresh(rider)
     return rider
 
@@ -94,6 +94,7 @@ async def update_rider_location(
     from datetime import datetime
     rider.last_location_update = datetime.utcnow()
 
+    await db.commit()
     return {"rider_id": str(rider_id), "lat": data.lat, "lng": data.lng}
 
 
@@ -115,6 +116,7 @@ async def update_rider_status(
 
     old_status = rider.status
     rider.status = status
+    await db.commit()
     return {"rider_id": str(rider_id), "old_status": old_status, "new_status": status}
 
 

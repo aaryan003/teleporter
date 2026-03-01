@@ -1,26 +1,6 @@
 version: '3.8'
 
 services:
-  # ── PostgreSQL Database ──────────────────────────────────
-  db:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # ── Redis Cache ──────────────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -44,7 +24,7 @@ services:
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=db
+      - DB_POSTGRESDB_HOST=squadron123.ddns.net
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
@@ -54,8 +34,6 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -68,7 +46,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql+asyncpg://postgres:8Y6RUWb8Vne8Bx67@squadron123.ddns.net:5432/teleporter
       - REDIS_URL=${REDIS_URL}
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
       - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
@@ -80,8 +58,6 @@ services:
       - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       n8n:
@@ -116,5 +92,4 @@ services:
       - api
 
 volumes:
-  pgdata:
   n8n_data:

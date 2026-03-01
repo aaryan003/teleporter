@@ -245,6 +245,8 @@ async def confirm_payment(
     )
     db.add(event)
 
+    await db.commit()
+
     # Notify user (payment confirmation)
     try:
         if order.user:
@@ -336,6 +338,8 @@ async def mark_cod_collected(
         actor_id=rider_id,
     )
     db.add(event)
+
+    await db.commit()
 
     return {
         "status": "cod_collected",
