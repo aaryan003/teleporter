@@ -14,26 +14,152 @@ PICKUP_SLOTS = [
 TZ = ZoneInfo("Asia/Kolkata")
 
 
-def pickup_timeslot_keyboard() -> InlineKeyboardMarkup:
-    """Pickup slot selection: next 2 days × 3 slots (9AM-12PM, 2PM-5PM, 6PM-9PM)."""
+def calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
+    """Generate a calendar for date selection."""
     now = datetime.now(TZ)
     buttons = []
-    for day_offset in range(2):
-        d = now.date() + timedelta(days=day_offset)
-        day_label = "Today" if day_offset == 0 else "Tomorrow"
-        for slot_idx, (h, m, label) in enumerate(PICKUP_SLOTS):
-            slot_start = datetime(d.year, d.month, d.day, h, m, tzinfo=TZ)
-            if day_offset == 0 and slot_start <= now:
-                continue  # Skip past slots for today
-            btn_label = f"📅 {day_label} · {label}"
-            buttons.append([
-                InlineKeyboardButton(
-                    text=btn_label,
-                    callback_data=f"pickup_slot_{day_offset}_{slot_idx}",
-                )
-            ])
+    
+    # Month/Year header with navigation
+    month_name = datetime(year, month, 1).strftime("%B %Y")
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year - 1 if month == 1 else year
+    next_month = month + 1 if month < 12 else 1
+    next_year = year + 1 if month == 12 else year
+    
+    buttons.append([
+        InlineKeyboardButton(text="◀️", callback_data=f"cal_nav_{prev_year}_{prev_month}"),
+        InlineKeyboardButton(text=f"📅 {month_name}", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="▶️", callback_data=f"cal_nav_{next_year}_{next_month}"),
+    ])
+    
+    # Day headers
+    buttons.append([
+        InlineKeyboardButton(text="Mon", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Tue", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Wed", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Thu", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Fri", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Sat", callback_data="cal_ignore"),
+        InlineKeyboardButton(text="Sun", callback_data="cal_ignore"),
+    ])
+    
+    # Calendar days
+    first_day = datetime(year, month, 1)
+    last_day = datetime(year, month + 1, 1) - timedelta(days=1) if month < 12 else datetime(year + 1, 1, 1) - timedelta(days=1)
+    
+    # Calculate starting weekday (Monday = 0)
+    start_weekday = first_day.weekday()
+    
+    # Fill empty cells before first day
+    week_row = []
+    for _ in range(start_weekday):
+        week_row.append(InlineKeyboardButton(text=" ", callback_data="cal_ignore"))
+    
+    # Add days of the month
+    for day in range(1, last_day.day + 1):
+        current_date = datetime(year, month, day, tzinfo=TZ)
+        
+        # Skip past dates
+        if current_date.date() < now.date():
+            day_text = f"~{day}~"
+            callback = "cal_ignore"
+        elif current_date.date() == now.date():
+            day_text = f"📅 {day}"
+            callback = f"cal_date_{year}_{month}_{day}"
+        else:
+            day_text = f"{day}"
+            callback = f"cal_date_{year}_{month}_{day}"
+        
+        week_row.append(InlineKeyboardButton(text=day_text, callback_data=callback))
+        
+        # Start new week after Sunday
+        if len(week_row) == 7:
+            buttons.append(week_row)
+            week_row = []
+    
+    # Fill remaining cells in last week
+    while len(week_row) < 7:
+        week_row.append(InlineKeyboardButton(text=" ", callback_data="cal_ignore"))
+    if week_row:
+        buttons.append(week_row)
+    
+    # Add back button
     buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")])
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def time_slots_keyboard(year: int, month: int, day: int) -> InlineKeyboardMarkup:
+    """Show time slots for a specific date."""
+    selected_date = datetime(year, month, day, tzinfo=TZ)
+    date_label = selected_date.strftime("%A, %B %d, %Y")
+    
+    buttons = []
+    
+    # Time slots for the selected date
+    time_slots = [
+        (9, 0, "9:00 AM - 12:00 PM"),
+        (12, 0, "12:00 PM - 3:00 PM"),
+        (15, 0, "3:00 PM - 6:00 PM"),
+        (18, 0, "6:00 PM - 9:00 PM"),
+    ]
+    
+    now = datetime.now(TZ)
+    
+    for h, m, label in time_slots:
+        slot_start = datetime(year, month, day, h, m, tzinfo=TZ)
+        
+        # Skip past slots for today
+        if selected_date.date() == now.date() and slot_start <= now:
+            continue
+        
+        btn_label = f"🕐 {label}"
+        callback_data = f"slot_{year}_{month}_{day}_{h}_{m}"
+        buttons.append([InlineKeyboardButton(text=btn_label, callback_data=callback_data)])
+    
+    # Navigation buttons
+    buttons.append([
+        InlineKeyboardButton(text="📅 Back to Calendar", callback_data=f"cal_nav_{year}_{month}"),
+        InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu"),
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def parse_calendar_callback(callback_data: str) -> dict | None:
+    """Parse calendar callback data and return action info."""
+    if callback_data.startswith("cal_nav_"):
+        parts = callback_data.replace("cal_nav_", "").split("_")
+        if len(parts) == 2:
+            return {"action": "navigate", "year": int(parts[0]), "month": int(parts[1])}
+    
+    elif callback_data.startswith("cal_date_"):
+        parts = callback_data.replace("cal_date_", "").split("_")
+        if len(parts) == 3:
+            return {"action": "select_date", "year": int(parts[0]), "month": int(parts[1]), "day": int(parts[2])}
+    
+    elif callback_data.startswith("slot_"):
+        parts = callback_data.replace("slot_", "").split("_")
+        if len(parts) == 5:
+            year, month, day, hour, minute = map(int, parts)
+            slot_datetime = datetime(year, month, day, hour, minute, tzinfo=TZ)
+            return {
+                "action": "select_slot",
+                "datetime": slot_datetime.isoformat(),
+                "year": year,
+                "month": month,
+                "day": day,
+                "hour": hour,
+                "minute": minute
+            }
+    
+    return None
+
+
+def pickup_timeslot_keyboard() -> InlineKeyboardMarkup:
+    """Legacy function - now redirects to calendar."""
+    now = datetime.now(TZ)
+    return calendar_keyboard(now.year, now.month)
 
 
 def parse_pickup_slot(callback_data: str) -> str | None:
