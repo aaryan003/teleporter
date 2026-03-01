@@ -159,6 +159,7 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
         pickup_address=data.pickup_address,
         pickup_lat=pickup_geo["lat"],
         pickup_lng=pickup_geo["lng"],
+        pickup_slot=data.pickup_slot,
         drop_address=data.drop_address,
         drop_lat=drop_geo["lat"],
         drop_lng=drop_geo["lng"],

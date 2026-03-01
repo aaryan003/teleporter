@@ -138,6 +138,7 @@ class OrderCreate(BaseModel):
     pickup_address: str
     drop_address: str
     package_size: PackageSize = PackageSize.SMALL
+    pickup_slot: datetime | None = None  # ISO datetime for scheduled pickup
     description: str | None = None
     is_express: bool = False
     is_batch_eligible: bool = True
@@ -185,6 +186,7 @@ class OrderResponse(BaseModel):
     payment: str
     payment_mode: str | None = None
     created_at: datetime
+    pickup_slot: datetime | None = None
     delivered_at: datetime | None
 
     class Config:
@@ -220,6 +222,7 @@ class OrderDetailResponse(BaseModel):
     payment: str
     payment_mode: str | None = None
     created_at: datetime
+    pickup_slot: datetime | None = None
     delivered_at: datetime | None
     cancelled_at: datetime | None
 

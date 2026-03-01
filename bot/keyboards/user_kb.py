@@ -1,6 +1,63 @@
 """Inline keyboard builders for user bot interactions."""
 
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Pickup timeslots: (start_hour, start_min, label)
+PICKUP_SLOTS = [
+    (9, 0, "9:00 AM - 12:00 PM"),
+    (14, 0, "2:00 PM - 5:00 PM"),
+    (18, 0, "6:00 PM - 9:00 PM"),
+]
+TZ = ZoneInfo("Asia/Kolkata")
+
+
+def pickup_timeslot_keyboard() -> InlineKeyboardMarkup:
+    """Pickup slot selection: next 2 days × 3 slots (9AM-12PM, 2PM-5PM, 6PM-9PM)."""
+    now = datetime.now(TZ)
+    buttons = []
+    for day_offset in range(2):
+        d = now.date() + timedelta(days=day_offset)
+        day_label = "Today" if day_offset == 0 else "Tomorrow"
+        for slot_idx, (h, m, label) in enumerate(PICKUP_SLOTS):
+            slot_start = datetime(d.year, d.month, d.day, h, m, tzinfo=TZ)
+            if day_offset == 0 and slot_start <= now:
+                continue  # Skip past slots for today
+            btn_label = f"📅 {day_label} · {label}"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=btn_label,
+                    callback_data=f"pickup_slot_{day_offset}_{slot_idx}",
+                )
+            ])
+    buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def parse_pickup_slot(callback_data: str) -> str | None:
+    """
+    Parse callback_data 'pickup_slot_D_S' into ISO datetime string.
+    Returns None if invalid.
+    """
+    if not callback_data.startswith("pickup_slot_"):
+        return None
+    parts = callback_data.replace("pickup_slot_", "").split("_")
+    if len(parts) != 2:
+        return None
+    try:
+        day_offset = int(parts[0])
+        slot_idx = int(parts[1])
+        if slot_idx < 0 or slot_idx >= len(PICKUP_SLOTS):
+            return None
+        now = datetime.now(TZ)
+        d = now.date() + timedelta(days=day_offset)
+        h, m, _ = PICKUP_SLOTS[slot_idx]
+        slot_start = datetime(d.year, d.month, d.day, h, m, tzinfo=TZ)
+        return slot_start.isoformat()
+    except (ValueError, IndexError):
+        return None
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:

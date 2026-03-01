@@ -26,6 +26,7 @@ from keyboards.user_kb import (
     main_menu_keyboard, package_size_keyboard, confirm_keyboard,
     payment_method_keyboard, subscription_plans_keyboard,
     order_actions_keyboard, order_list_keyboard, tracking_keyboard,
+    pickup_timeslot_keyboard, parse_pickup_slot,
 )
 
 router = Router()
@@ -280,17 +281,44 @@ async def _render_order_detail(callback: CallbackQuery, order: dict, order_id: s
     if order.get("created_at"):
         try:
             from datetime import datetime
+            from zoneinfo import ZoneInfo
             dt = datetime.fromisoformat(order["created_at"].replace("Z", "+00:00"))
-            date_str = dt.strftime("%b %d, %I:%M %p")
+            ist = ZoneInfo("Asia/Kolkata")
+            dt_ist = dt.astimezone(ist) if dt.tzinfo else dt.replace(tzinfo=ist)
+            date_str = dt_ist.strftime("%b %d, %I:%M %p")
         except Exception:
             date_str = order["created_at"][:16]
+
+    pickup_slot_str = ""
+    if order.get("pickup_slot"):
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            dt = datetime.fromisoformat(str(order["pickup_slot"]).replace("Z", "+00:00"))
+            ist = ZoneInfo("Asia/Kolkata")
+            dt_ist = dt.astimezone(ist) if dt.tzinfo else dt.replace(tzinfo=ist)
+            pickup_slot_str = f"\n📅 Pickup: <b>{dt_ist.strftime('%a, %b %d · %I:%M %p')}</b>\n"
+        except Exception:
+            pickup_slot_str = f"\n📅 Pickup: <b>{str(order.get('pickup_slot', ''))[:16]}</b>\n"
+
+    delivered_str = ""
+    if order.get("delivered_at"):
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            dt = datetime.fromisoformat(str(order["delivered_at"]).replace("Z", "+00:00"))
+            ist = ZoneInfo("Asia/Kolkata")
+            dt_ist = dt.astimezone(ist) if dt.tzinfo else dt.replace(tzinfo=ist)
+            delivered_str = f"\n✅ Delivered: <b>{dt_ist.strftime('%a, %b %d · %I:%M %p')}</b>"
+        except Exception:
+            delivered_str = f"\n✅ Delivered: {str(order.get('delivered_at', ''))[:16]}"
 
     text = (
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📋 <b>Order #{order['order_number']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{status_emoji} Status: <b>{order['status'].replace('_', ' ').title()}</b>\n"
-        f"📅 Placed: {date_str}\n\n"
+        f"📅 Placed: {date_str}{pickup_slot_str}\n"
         f"📍 <b>Pickup:</b>\n"
         f"   {order['pickup_address'][:60]}\n\n"
         f"📍 <b>Drop-off:</b>\n"
@@ -311,9 +339,7 @@ async def _render_order_detail(callback: CallbackQuery, order: dict, order_id: s
     if order.get("payment_mode"):
         mode_label = {"COD": "Cash", "CARD": "Card", "UPI": "UPI"}.get(order["payment_mode"], order["payment_mode"])
         text += f" ({mode_label})"
-
-    if order.get("delivered_at"):
-        text += f"\n✅ Delivered: {order['delivered_at'][:16]}"
+    text += delivered_str
 
     await callback.message.edit_text(
         text,
@@ -511,9 +537,28 @@ async def receive_pickup_address(message: Message, state: FSMContext):
             return
         await state.update_data(pickup_address=message.text, pickup_type="text")
 
-    await state.set_state(BookingFlow.waiting_drop_address)
+    await state.set_state(BookingFlow.waiting_pickup_slot)
     await message.answer(
         "✅ Pickup address recorded!\n\n"
+        "📅 <b>Choose a pickup timeslot</b> (next 2 days):",
+        reply_markup=pickup_timeslot_keyboard(),
+    )
+
+
+# ── Booking Flow: Pickup Timeslot ──────────────────────────
+
+@router.callback_query(F.data.startswith("pickup_slot_"), BookingFlow.waiting_pickup_slot)
+async def receive_pickup_slot(callback: CallbackQuery, state: FSMContext):
+    """Receive pickup timeslot selection."""
+    slot_iso = parse_pickup_slot(callback.data)
+    if not slot_iso:
+        await callback.answer("Invalid slot.", show_alert=True)
+        return
+    await callback.answer()
+    await state.update_data(pickup_slot=slot_iso)
+    await state.set_state(BookingFlow.waiting_drop_address)
+    await callback.message.edit_text(
+        "✅ Pickup slot selected!\n\n"
         "📍 Now send the <b>drop-off address</b>:",
     )
 
@@ -629,6 +674,15 @@ async def receive_package_size(callback: CallbackQuery, state: FSMContext):
         "LARGE": "📦📦 Large", "BULKY": "🚛 Bulky",
     }.get(size, size)
 
+    pickup_slot_str = ""
+    if data.get("pickup_slot"):
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(data["pickup_slot"].replace("Z", "+00:00"))
+            pickup_slot_str = f"\n📅 Pickup: <b>{dt.strftime('%a, %b %d · %I:%M %p')}</b>\n"
+        except Exception:
+            pickup_slot_str = f"\n📅 Pickup: <b>{data['pickup_slot'][:16]}</b>\n"
+
     text = (
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 <b>Price Estimate</b>\n"
@@ -636,7 +690,7 @@ async def receive_package_size(callback: CallbackQuery, state: FSMContext):
         f"📏 Distance: <b>{estimate['distance_km']} km</b>\n"
         f"⏱️ Duration: <b>~{estimate['duration_min']} min</b>\n"
         f"{vehicle_emoji} Vehicle: <b>{estimate.get('vehicle_type', 'BIKE')}</b>\n"
-        f"📦 Size: {size_label}\n\n"
+        f"📦 Size: {size_label}{pickup_slot_str}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💵 Base: ${estimate['base_cost']}\n"
     )
@@ -686,7 +740,7 @@ async def handle_payment(callback: CallbackQuery, state: FSMContext):
     })
 
     # Create order via API
-    order, err_msg = await _api_call_with_error("POST", "/api/orders/", json={
+    payload = {
         "telegram_id": callback.from_user.id,
         "pickup_address": data["pickup_address"],
         "drop_address": data["drop_address"],
@@ -696,7 +750,10 @@ async def handle_payment(callback: CallbackQuery, state: FSMContext):
         "payment_mode": payment_mode,
         "drop_contact_name": data.get("recipient_name"),
         "drop_contact_phone": data.get("recipient_phone"),
-    })
+    }
+    if data.get("pickup_slot"):
+        payload["pickup_slot"] = data["pickup_slot"]
+    order, err_msg = await _api_call_with_error("POST", "/api/orders/", json=payload)
 
     if not order:
         hint = ""
