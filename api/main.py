@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from db.database import engine, Base
-from routers import orders, riders, users, payments, admin, warehouses, webhooks
+from routers import orders, riders, users, payments, admin, warehouses, webhooks, rider_applications
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ app.include_router(warehouses.router, prefix="/api/warehouses", tags=["Warehouse
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin Dashboard"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["n8n Webhooks"])
+app.include_router(rider_applications.router, prefix="/api/rider-applications", tags=["Rider Applications"])
 
 
 @app.get("/health")

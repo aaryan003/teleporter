@@ -1,6 +1,37 @@
-"""Inline keyboard builders for rider bot interactions (simplified)."""
+"""Inline keyboard builders for rider bot interactions."""
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+
+def rider_main_menu_keyboard(current_status: str = "OFF_DUTY") -> InlineKeyboardMarkup:
+    """Rider main menu — dynamic based on current duty status."""
+    buttons = []
+
+    # Row 1: Availability toggle — show only the relevant toggle
+    if current_status in ("OFF_DUTY",):
+        buttons.append([InlineKeyboardButton(text="🟢 Go On Duty", callback_data="rider_go_on_duty")])
+    else:
+        buttons.append([InlineKeyboardButton(text="🔴 Go Off Duty", callback_data="rider_go_off_duty")])
+
+    # Row 2: Active Tasks + View Route
+    buttons.append([
+        InlineKeyboardButton(text="📦 My Active Tasks", callback_data="rider_active_tasks"),
+        InlineKeyboardButton(text="🗺️ View Route", callback_data="rider_view_route"),
+    ])
+
+    # Row 3: Earnings + Stats
+    buttons.append([
+        InlineKeyboardButton(text="💰 My Earnings", callback_data="rider_earnings"),
+        InlineKeyboardButton(text="📊 My Stats", callback_data="rider_stats"),
+    ])
+
+    # Row 4: Profile + Help
+    buttons.append([
+        InlineKeyboardButton(text="⚙️ My Profile", callback_data="rider_profile"),
+        InlineKeyboardButton(text="❓ Help", callback_data="rider_help"),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def rider_task_keyboard(order_id: str) -> InlineKeyboardMarkup:

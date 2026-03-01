@@ -4,6 +4,7 @@ import TopBar from './components/layout/TopBar';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
 import Fleet from './pages/Fleet';
+import RiderApplications from './pages/RiderApplications';
 import Warehouses from './pages/Warehouses';
 import Insights from './pages/Insights';
 import Settings from './pages/Settings';
@@ -19,6 +20,7 @@ export default function App() {
                         <Route path="/" element={<Dashboard />} />
                         <Route path="/orders" element={<Orders />} />
                         <Route path="/fleet" element={<Fleet />} />
+                        <Route path="/rider-applications" element={<RiderApplications />} />
                         <Route path="/warehouses" element={<Warehouses />} />
                         <Route path="/insights" element={<Insights />} />
                         <Route path="/settings" element={<Settings />} />

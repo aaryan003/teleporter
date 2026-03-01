@@ -8,10 +8,58 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
 from models.user import User
+from models.rider import Rider
 from schemas import UserCreate, UserUpdate, UserResponse
+from schemas.rider_application import IdentityResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ── Identity Resolution ────────────────────────────────────
+
+@router.get("/identity/{telegram_id}", response_model=IdentityResponse)
+async def resolve_identity(telegram_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Determine if a Telegram user is a customer, rider, both, or new.
+    Called on every /start to route the bot experience.
+    """
+    # Check users table
+    user_result = await db.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
+    user = user_result.scalar_one_or_none()
+
+    # Check riders table
+    rider_result = await db.execute(
+        select(Rider).where(Rider.telegram_id == telegram_id)
+    )
+    rider = rider_result.scalar_one_or_none()
+
+    # Check rider_applications table for pending/rejected
+    from models.rider_application import RiderApplication
+    app_result = await db.execute(
+        select(RiderApplication).where(RiderApplication.telegram_id == telegram_id)
+    )
+    application = app_result.scalar_one_or_none()
+
+    rider_status = None
+    rider_id = None
+
+    if rider:
+        rider_status = rider.status
+        rider_id = rider.id
+    elif application:
+        rider_status = application.status  # PENDING or REJECTED
+        rider_id = None
+
+    return IdentityResponse(
+        is_customer=user is not None and user.phone is not None,
+        is_rider=rider is not None,
+        rider_status=rider_status,
+        customer_id=user.id if user else None,
+        rider_id=rider_id,
+    )
 
 
 @router.patch("/{telegram_id}", response_model=UserResponse)

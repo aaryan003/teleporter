@@ -149,3 +149,39 @@ export function useGenerateInsights() {
         onSuccess: () => qc.invalidateQueries({ queryKey: ['insights'] }),
     });
 }
+
+// ── Rider Applications ───────────────────────────────────
+
+export function useRiderApplications(status) {
+    const qs = status ? `?status=${status}` : '';
+    return useQuery({
+        queryKey: ['rider-applications', status],
+        queryFn: () => fetchAPI(`/rider-applications/${qs}`),
+        refetchInterval: 30_000,
+    });
+}
+
+export function useRiderApplicationCount(status) {
+    const qs = status ? `?status=${status}` : '';
+    return useQuery({
+        queryKey: ['rider-applications-count', status],
+        queryFn: () => fetchAPI(`/rider-applications/count${qs}`),
+        refetchInterval: 30_000,
+    });
+}
+
+export function useReviewApplication() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: ({ applicationId, action, admin_note, reviewed_by }) =>
+            fetchAPI(`/rider-applications/${applicationId}/review`, {
+                method: 'PUT',
+                body: JSON.stringify({ action, admin_note, reviewed_by }),
+            }),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['rider-applications'] });
+            qc.invalidateQueries({ queryKey: ['rider-applications-count'] });
+            qc.invalidateQueries({ queryKey: ['riders'] });
+        },
+    });
+}

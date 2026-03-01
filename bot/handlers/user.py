@@ -15,7 +15,10 @@ Features:
 
 import httpx
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import (
+    Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton,
+)
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
@@ -92,64 +95,138 @@ async def _api_call_with_error(method: str, endpoint: str, **kwargs) -> tuple[di
 
 # ── /start ─────────────────────────────────────────────────
 
+def _new_user_keyboard() -> InlineKeyboardMarkup:
+    """Welcome keyboard for brand-new users — Path C."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Send a Parcel", callback_data="new_user_customer")],
+        [InlineKeyboardButton(text="🏍️ Register as a Rider", callback_data="register_rider")],
+    ])
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    """Handle /start — register or welcome back."""
+    """Handle /start — 3-path identity resolution.
+    
+    Path A: Existing customer → customer menu
+    Path B: Existing/pending rider → rider menu or status message
+    Path C: Brand-new user → choose customer or rider
+    """
     await state.clear()
 
-    # Check if user exists
-    print(f"🔍 Checking user: {message.from_user.id}")
-    user = await _api_call("GET", f"/api/users/{message.from_user.id}")
-    print(f"📊 User data: {user}")
+    # Call identity resolution endpoint
+    identity = await _api_call("GET", f"/api/users/identity/{message.from_user.id}")
 
-    if user:
-        # User exists - check if they have phone
-        if user.get("phone"):
-            # Existing user with phone - show welcome back message
+    if not identity:
+        # API unreachable — fallback to Path C (new user experience)
+        await message.answer(
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📦 <b>Welcome to Teleporter!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "👋 What would you like to do?",
+            reply_markup=_new_user_keyboard(),
+        )
+        return
+
+    is_customer = identity.get("is_customer", False)
+    is_rider = identity.get("is_rider", False)
+    rider_status = identity.get("rider_status")
+
+    # ── Path B: Existing Rider ─────────────────────────────
+    if is_rider:
+        if rider_status in ("ON_DUTY", "OFF_DUTY", "ON_PICKUP", "ON_DELIVERY"):
+            # Import rider menu keyboard builder — this is defined in rider_menu handler
+            from keyboards.rider_kb import rider_main_menu_keyboard
             await message.answer(
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📦 <b>TeleporterBot Logistics</b>\n"
+                f"🏍️ <b>Teleporter Rider</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Welcome back <b>{message.from_user.first_name}</b>! 👋\n\n"
-                f"Fast, reliable, warehouse-backed\n"
-                f"deliveries at your fingertips.\n\n"
-                f"What would you like to do?",
-                reply_markup=main_menu_keyboard(),
+                f"Welcome back, <b>{message.from_user.first_name}</b>! 👋\n\n"
+                f"Status: {'🟢 On Duty' if rider_status == 'ON_DUTY' else '🔴 Off Duty' if rider_status == 'OFF_DUTY' else '📦 On Pickup' if rider_status == 'ON_PICKUP' else '🚚 On Delivery'}",
+                reply_markup=rider_main_menu_keyboard(rider_status),
             )
-        else:
-            # User exists but no phone - ask for phone
-            await state.set_state(UserRegistration.waiting_phone)
-            kb = ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="📱 Share Contact", request_contact=True)]],
-                resize_keyboard=True,
-                one_time_keyboard=True
-            )
-            await message.answer(
-                "👋 Welcome back! Let's complete your profile.\n"
-                "Please share your phone number to continue.",
-                reply_markup=kb
-            )
-    else:
-        # New user - create and ask for phone
-        print(f"➕ Creating new user: {message.from_user.id}")
-        user = await _api_call("POST", "/api/users/", json={
-            "telegram_id": message.from_user.id,
-            "full_name": message.from_user.full_name,
-            "telegram_username": message.from_user.username,
-        })
-        print(f"✅ Created user: {user}")
-        
-        await state.set_state(UserRegistration.waiting_phone)
-        kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="📱 Share Contact", request_contact=True)]],
-            resize_keyboard=True,
-            one_time_keyboard=True
-        )
+            return
+
+    # Check for pending/rejected rider application
+    if rider_status == "PENDING":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📞 Contact Support", url="https://t.me/TeleporterSupport")],
+        ])
         await message.answer(
-            "👋 Welcome! Let's set up your account.\n"
-            "Please share your phone number to get started.",
-            reply_markup=kb
+            "⏳ <b>Application Under Review</b>\n\n"
+            "Your rider application is being reviewed by our team.\n"
+            "You will be notified here once it's processed.\n\n"
+            "This usually takes 24-48 hours. 🔔",
+            reply_markup=kb,
         )
+        return
+
+    if rider_status == "REJECTED":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Re-apply", callback_data="register_rider")],
+            [InlineKeyboardButton(text="📞 Contact Support", url="https://t.me/TeleporterSupport")],
+        ])
+        await message.answer(
+            "❌ <b>Application Not Approved</b>\n\n"
+            "Your rider application was not approved.\n"
+            "You can re-apply or contact support for more information.",
+            reply_markup=kb,
+        )
+        return
+
+    # ── Path A: Existing Customer ──────────────────────────
+    if is_customer:
+        await message.answer(
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>TeleporterBot Logistics</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Welcome back <b>{message.from_user.first_name}</b>! 👋\n\n"
+            f"Fast, reliable, warehouse-backed\n"
+            f"deliveries at your fingertips.\n\n"
+            f"What would you like to do?",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # ── Path C: Brand New User ─────────────────────────────
+    await message.answer(
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📦 <b>Welcome to Teleporter!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👋 Fast, reliable, warehouse-backed\n"
+        "deliveries at your fingertips.\n\n"
+        "What would you like to do?",
+        reply_markup=_new_user_keyboard(),
+    )
+
+
+# ── New User → Customer Registration ──────────────────────
+
+@router.callback_query(F.data == "new_user_customer")
+async def new_user_start_customer(callback: CallbackQuery, state: FSMContext):
+    """New user chose 'Send a Parcel' — enter customer registration flow."""
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    # Create user in backend
+    user = await _api_call("POST", "/api/users/", json={
+        "telegram_id": telegram_id,
+        "full_name": callback.from_user.full_name or "User",
+        "telegram_username": callback.from_user.username,
+    })
+
+    # Ask for phone number
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    await state.set_state(UserRegistration.waiting_phone)
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Share Contact", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+    await callback.message.answer(
+        "👋 Welcome! Let's set up your account.\n"
+        "Please share your phone number to get started.",
+        reply_markup=kb,
+    )
 
 @router.message(UserRegistration.waiting_phone, F.contact | F.text)
 async def process_phone(message: Message, state: FSMContext):

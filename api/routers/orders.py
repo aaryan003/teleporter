@@ -5,6 +5,7 @@ import random
 import string
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,7 @@ from services.otp import generate_otp, verify_otp
 from services.pickup_scheduler import (
     get_available_slots, get_scheduling_message, determine_time_factor,
 )
+from services import bot_notifier
 
 router = APIRouter()
 
@@ -238,6 +240,43 @@ async def update_order_status(
     db.add(event)
 
     await db.commit()
+
+    # ── Fire rider notifications on assignment ──────────────
+    try:
+        new_status = data.status.value
+
+        if new_status == "PICKUP_RIDER_ASSIGNED" and order.pickup_rider_id:
+            rider_res = await db.execute(select(Rider).where(Rider.id == order.pickup_rider_id))
+            rider = rider_res.scalar_one_or_none()
+            if rider:
+                await bot_notifier.notify_pickup_assigned(
+                    telegram_id=rider.telegram_id,
+                    order_number=order.order_number,
+                    pickup_address=order.pickup_address,
+                    pickup_slot=order.pickup_slot.isoformat() if order.pickup_slot else None,
+                    order_id=str(order.id),
+                )
+
+        elif new_status == "DELIVERY_RIDER_ASSIGNED" and order.delivery_route_id:
+            from models.delivery_route import DeliveryRoute
+            route_res = await db.execute(
+                select(DeliveryRoute).where(DeliveryRoute.id == order.delivery_route_id)
+            )
+            route = route_res.scalar_one_or_none()
+            if route and route.rider_id:
+                rider_res2 = await db.execute(select(Rider).where(Rider.id == route.rider_id))
+                rider2 = rider_res2.scalar_one_or_none()
+                if rider2:
+                    await bot_notifier.notify_delivery_assigned(
+                        telegram_id=rider2.telegram_id,
+                        total_parcels=route.total_parcels,
+                        total_distance_km=float(route.total_distance_km) if route.total_distance_km else None,
+                        route_id=str(route.id),
+                    )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Notification hook error: %s", e)
+
     return {"order_id": str(order_id), "old_status": old_status, "new_status": data.status.value}
 
 
@@ -285,6 +324,153 @@ async def verify_order_otp(data: OTPVerifyRequest, db: AsyncSession = Depends(ge
             await db.commit()
 
     return result
+
+
+# ── Rider-Facing OTP Confirmation Endpoints ────────────────
+
+class RiderOTPConfirm(BaseModel):
+    """Rider submits OTP for pickup or drop confirmation."""
+    otp: str = Field(..., min_length=6, max_length=6)
+    rider_id: uuid.UUID
+
+
+@router.post("/{order_id}/confirm-pickup-otp")
+async def confirm_pickup_otp(
+    order_id: uuid.UUID,
+    data: RiderOTPConfirm,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rider confirms pickup by entering customer's 6-digit OTP.
+    Transitions order: PICKUP_EN_ROUTE → PICKED_UP.
+    """
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.pickup_rider_id != data.rider_id:
+        return {"valid": False, "error": "You are not assigned to this pickup"}
+
+    if order.status not in ("PICKUP_RIDER_ASSIGNED", "PICKUP_EN_ROUTE"):
+        return {"valid": False, "error": f"Order not in pickup phase (status: {order.status})"}
+
+    # Verify OTP via Redis
+    otp_result = await verify_otp(str(order_id), "pickup", data.otp)
+    if not otp_result["valid"]:
+        return otp_result
+
+    # Update order
+    old_status = order.status
+    order.status = "PICKED_UP"
+    order.pickup_confirmed_at = datetime.utcnow()
+
+    event = OrderEvent(
+        order_id=order.id,
+        from_status=old_status,
+        to_status="PICKED_UP",
+        actor_type="RIDER",
+        actor_id=data.rider_id,
+    )
+    db.add(event)
+    await db.commit()
+
+    return {"valid": True, "new_status": "PICKED_UP"}
+
+
+@router.post("/{order_id}/confirm-drop-otp")
+async def confirm_drop_otp(
+    order_id: uuid.UUID,
+    data: RiderOTPConfirm,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rider confirms delivery by entering recipient's 6-digit OTP.
+    Transitions order: OUT_FOR_DELIVERY → DELIVERED.
+    Also increments rider's total_deliveries count.
+    """
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.delivery_rider_id != data.rider_id:
+        return {"valid": False, "error": "You are not assigned to this delivery"}
+
+    if order.status not in ("DELIVERY_RIDER_ASSIGNED", "OUT_FOR_DELIVERY"):
+        return {"valid": False, "error": f"Order not in delivery phase (status: {order.status})"}
+
+    # Verify OTP via Redis
+    otp_result = await verify_otp(str(order_id), "drop", data.otp)
+    if not otp_result["valid"]:
+        return otp_result
+
+    # Update order
+    old_status = order.status
+    order.status = "DELIVERED"
+    order.delivered_at = datetime.utcnow()
+
+    event = OrderEvent(
+        order_id=order.id,
+        from_status=old_status,
+        to_status="DELIVERED",
+        actor_type="RIDER",
+        actor_id=data.rider_id,
+    )
+    db.add(event)
+
+    # Increment rider's total deliveries
+    rider_result = await db.execute(select(Rider).where(Rider.id == data.rider_id))
+    rider = rider_result.scalar_one_or_none()
+    if rider:
+        rider.total_deliveries = (rider.total_deliveries or 0) + 1
+        rider.current_load = max((rider.current_load or 1) - 1, 0)
+
+    await db.commit()
+
+    return {"valid": True, "new_status": "DELIVERED"}
+
+
+class WarehouseArrival(BaseModel):
+    rider_id: uuid.UUID
+
+
+@router.post("/{order_id}/mark-at-warehouse")
+async def mark_at_warehouse(
+    order_id: uuid.UUID,
+    data: WarehouseArrival,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rider marks parcel arrived at warehouse after pickup.
+    Transitions: PICKED_UP / IN_TRANSIT_TO_WAREHOUSE → AT_WAREHOUSE.
+    """
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.pickup_rider_id != data.rider_id:
+        return {"success": False, "error": "You are not assigned to this pickup"}
+
+    if order.status not in ("PICKED_UP", "IN_TRANSIT_TO_WAREHOUSE"):
+        return {"success": False, "error": f"Order not in transit to warehouse (status: {order.status})"}
+
+    old_status = order.status
+    order.status = "AT_WAREHOUSE"
+    order.warehouse_received_at = datetime.utcnow()
+
+    event = OrderEvent(
+        order_id=order.id,
+        from_status=old_status,
+        to_status="AT_WAREHOUSE",
+        actor_type="RIDER",
+        actor_id=data.rider_id,
+    )
+    db.add(event)
+    await db.commit()
+
+    return {"success": True, "new_status": "AT_WAREHOUSE"}
 
 
 @router.get("/user/{telegram_id}", response_model=list[OrderResponse])

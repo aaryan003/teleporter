@@ -110,6 +110,7 @@ class RiderResponse(BaseModel):
     full_name: str
     phone: str
     vehicle: str
+    vehicle_reg: str | None = None
     status: str
     warehouse_id: uuid.UUID | None
     current_lat: float | None

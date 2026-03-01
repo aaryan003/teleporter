@@ -27,3 +27,8 @@ dashboard/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+spec_output.txt
+teleporter_rider_flow_spec.docx
+PROJECT_GUIDE.md
+

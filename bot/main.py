@@ -20,6 +20,9 @@ from aiogram.types import Update
 from config import settings
 from handlers.user import router as user_router
 from handlers.rider import router as rider_router
+from handlers.rider_onboarding import router as rider_onboarding_router
+from handlers.rider_menu import router as rider_menu_router
+from services.location_tracker import location_tracker_loop
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -59,9 +62,14 @@ async def main():
     # Global middleware — swallow harmless Telegram "not modified" errors
     dp.update.outer_middleware(ignore_message_not_modified_middleware)
 
-    # Register routers
+    # Register routers — order matters: user first, then rider onboarding, then rider menu, then rider
     dp.include_router(user_router)
+    dp.include_router(rider_onboarding_router)
+    dp.include_router(rider_menu_router)
     dp.include_router(rider_router)
+
+    # Start location tracker background task
+    asyncio.create_task(location_tracker_loop(bot))
 
     # Start polling
     logger.info("✅ Bot is ready!")

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_HOURS: int = 24
 
+    # Rider settings
+    RIDER_PER_DELIVERY_RATE: float = 60.0  # Earnings per completed delivery (INR)
+    RIDER_KYC_UPLOAD_PATH: str = "/uploads/kyc"  # Path for license/Aadhar images
+    ADMIN_PANEL_URL: str = "http://localhost:3000"  # Admin dashboard URL
+
     # Business rules
     BUSINESS_HOURS_START: int = 8   # 8 AM
     BUSINESS_HOURS_END: int = 20    # 8 PM
